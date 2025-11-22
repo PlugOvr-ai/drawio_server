@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DrawioServer - Demo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 0; background: #0b0c10; color: #e5e5e5; }
+    header { padding: 16px; background: #1f2833; display: flex; align-items: center; justify-content: space-between; }
+    main { padding: 16px; display: grid; grid-template-columns: 280px 1fr; gap: 16px; }
+    .card { background: #16181d; border: 1px solid #2f3742; border-radius: 10px; padding: 12px; }
+    input, button, select, textarea { background: #0e1116; color: #e5e5e5; border: 1px solid #2f3742; border-radius: 8px; padding: 8px 10px; }
+    button { cursor: pointer; }
+    textarea { width: 100%; height: 60vh; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    ul { list-style: none; padding-left: 0; }
+    li { margin-bottom: 8px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .muted { color: #9aa4af; font-size: 12px; }
+    .badge { padding: 2px 6px; border-radius: 100px; background: #233042; font-size: 12px; }
+    .success { color: #56d364; }
+    .danger { color: #ff6b6b; }
+    .right { text-align: right; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="row">
+      <strong>DrawioServer</strong>
+      <span class="badge" id="user-badge">guest</span>
+    </div>
+    <div class="row">
+      <input id="username" placeholder="username" />
+      <input id="password" placeholder="password" type="password" />
+      <button id="login">Login</button>
+      <button id="logout">Logout</button>
+    </div>
+  </header>
+  <main>
+    <section class="card">
+      <div class="row" style="justify-content: space-between;">
+        <strong>Files</strong>
+        <button id="refresh">Refresh</button>
+      </div>
+      <ul id="file-list"></ul>
+      <div class="row">
+        <input id="new-file-name" placeholder="new file name (ends with .drawio)" />
+        <button id="create-file">Create</button>
+      </div>
+      <p class="muted">Click a file to open and collaborate. This demo shows raw XML in a textarea.</p>
+    </section>
+    <section class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <strong id="open-file-name">No file</strong>
+          <span class="badge" id="version-badge">v0</span>
+        </div>
+        <div class="row">
+          <button id="save-http">Save (HTTP)</button>
+          <button id="close-ws">Close WS</button>
+        </div>
+      </div>
+      <textarea id="editor" placeholder="Open a .drawio file..."></textarea>
+      <div class="row right">
+        <span class="muted" id="status">Disconnected</span>
+      </div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const userBadge = $('user-badge');
+    const statusEl = $('status');
+    const versionBadge = $('version-badge');
+    const editor = $('editor');
+    const fileList = $('file-list');
+    const openFileName = $('open-file-name');
+
+    let ws = null;
+    let currentFile = null;
+    let currentVersion = 0;
+    let typingTimer = null;
+
+    async function fetchJSON(url, opts = {}) {
+      const res = await fetch(url, { credentials: 'include', ...opts });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    async function fetchText(url, opts = {}) {
+      const res = await fetch(url, { credentials: 'include', ...opts });
+      if (!res.ok) throw new Error(await res.text());
+      return res.text();
+    }
+
+    async function refreshMe() {
+      try {
+        const me = await fetchJSON('/me');
+        userBadge.textContent = me.username;
+      } catch {
+        userBadge.textContent = 'guest';
+      }
+    }
+    async function refreshFiles() {
+      fileList.innerHTML = '';
+      try {
+        const files = await fetchJSON('/files');
+        for (const f of files) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = '#';
+          a.textContent = f.name;
+          a.onclick = () => openFile(f.name);
+          const btn = document.createElement('button');
+          btn.textContent = 'Open';
+          btn.onclick = () => openFile(f.name);
+          li.appendChild(a);
+          li.appendChild(btn);
+          fileList.appendChild(li);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    $('login').onclick = async () => {
+      const username = $('username').value.trim();
+      const password = $('password').value.trim();
+      if (!username || !password) return alert('enter username/password');
+      try {
+        await fetch('/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        await refreshMe();
+      } catch (e) { alert(e.message); }
+    };
+    $('logout').onclick = async () => {
+      await fetch('/logout', { method: 'POST', credentials: 'include' });
+      await refreshMe();
+    };
+    $('refresh').onclick = refreshFiles;
+    $('create-file').onclick = async () => {
+      const name = $('new-file-name').value.trim();
+      if (!name || !name.endsWith('.drawio')) return alert('name must end with .drawio');
+      try {
+        await fetch(`/files/${encodeURIComponent(name)}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: '' }),
+        });
+        $('new-file-name').value = '';
+        await refreshFiles();
+        openFile(name);
+      } catch (e) { alert(e.message); }
+    };
+
+    async function openFile(name) {
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      currentFile = name;
+      openFileName.textContent = name;
+      statusEl.textContent = 'Loading...';
+      try {
+        const meta = await fetchJSON(`/files/${encodeURIComponent(name)}`);
+        editor.value = meta.content;
+        currentVersion = meta.version;
+        versionBadge.textContent = 'v' + currentVersion;
+      } catch (e) { console.error(e); }
+      connectWS(name);
+    }
+
+    function connectWS(name) {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}`);
+      ws.onopen = () => statusEl.textContent = 'Connected';
+      ws.onclose = () => statusEl.textContent = 'Disconnected';
+      ws.onerror = () => statusEl.textContent = 'Error';
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'init') {
+            editor.value = msg.content;
+            currentVersion = msg.version;
+            versionBadge.textContent = 'v' + currentVersion;
+          } else if (msg.type === 'update') {
+            if (document.activeElement !== editor) {
+              editor.value = msg.content;
+            }
+            currentVersion = msg.version;
+            versionBadge.textContent = 'v' + currentVersion;
+          }
+        } catch (e) {
+          console.error('bad msg', e, ev.data);
+        }
+      };
+    }
+    $('close-ws').onclick = () => { if (ws) ws.close(); ws = null; };
+
+    $('save-http').onclick = async () => {
+      if (!currentFile) return;
+      try {
+        await fetch(`/files/${encodeURIComponent(currentFile)}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: editor.value }),
+        });
+      } catch (e) { alert(e.message); }
+    };
+
+    editor.addEventListener('input', () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (typingTimer) clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => {
+        const msg = { type: 'replace', version: currentVersion, content: editor.value };
+        ws.send(JSON.stringify(msg));
+      }, 300);
+    });
+
+    refreshMe();
+    refreshFiles();
+  </script>
+</body>
+</html>
+
+
