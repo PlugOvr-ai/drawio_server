@@ -74,6 +74,7 @@
     let lastXml = '';
     let selfUpdateToken = 0; // increments on our own WS sends to detect self echoes (best-effort)
     let myUsername = 'guest';
+    let myClientId = null;
     const cursors = new Map(); // username -> {el, color, selEl}
     let lastEmbedMoveAt = 0;
 
@@ -119,6 +120,7 @@
             currentVersion = msg.version || 0;
             $('version').textContent = 'v' + currentVersion;
             lastXml = msg.content || '';
+            if (msg.your_id) { myClientId = msg.your_id; }
             if (isEditorReady) {
               postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: fileName });
             }
@@ -131,11 +133,11 @@
           } else if (msg.type === 'presence_leave') {
             removeCursor(msg.username);
           } else if (msg.type === 'cursor') {
-            if (msg.username && msg.username !== myUsername) {
-              moveCursor(msg.username, msg.x, msg.y);
-            }
+            const fromSelf = (msg.sender_id && myClientId && msg.sender_id === myClientId) || (msg.username && msg.username === myUsername);
+            if (!fromSelf) { moveCursor(msg.username, msg.x, msg.y, msg.basis); }
           } else if (msg.type === 'selection') {
-            if (msg.username && msg.username !== myUsername) {
+            const fromSelf = (msg.sender_id && myClientId && msg.sender_id === myClientId) || (msg.username && msg.username === myUsername);
+            if (!fromSelf) {
               const c = cursors.get(msg.username);
               if (c) {
                 const n = (msg.ids || []).length;
@@ -144,6 +146,8 @@
               }
             }
           } else if (msg.type === 'update') {
+            const fromSelf = (msg.sender_id && myClientId && msg.sender_id === myClientId) || false;
+            if (fromSelf) { return; }
             currentVersion = msg.version || currentVersion;
             $('version').textContent = 'v' + currentVersion;
             if (msg.content && msg.content !== lastXml) {
@@ -191,13 +195,22 @@
           const now = performance.now();
           if (now - lastSentLocal < 33) return;
           lastSentLocal = now;
-          const overlayRect = $('overlay').getBoundingClientRect();
-          const iframeRect = iframe.getBoundingClientRect();
-          const absX = iframeRect.left + e.clientX;
-          const absY = iframeRect.top + e.clientY;
-          const nx = Math.max(0, Math.min(1, (absX - overlayRect.left) / Math.max(1, overlayRect.width)));
-          const ny = Math.max(0, Math.min(1, (absY - overlayRect.top) / Math.max(1, overlayRect.height)));
-          ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
+          // Prefer coordinates relative to the drawing stage to remove toolbar offsets
+          const stage = childDoc.querySelector('.geDiagramContainer') || childDoc.querySelector('#geDiagramContainer');
+          if (stage) {
+            const stageRect = stage.getBoundingClientRect();
+            const nx = Math.max(0, Math.min(1, (e.clientX - stageRect.left) / Math.max(1, stageRect.width)));
+            const ny = Math.max(0, Math.min(1, (e.clientY - stageRect.top) / Math.max(1, stageRect.height)));
+            ws.send(JSON.stringify({ type: 'cursor', basis: 'stage', x: nx, y: ny }));
+          } else {
+            const overlayRect = $('overlay').getBoundingClientRect();
+            const iframeRect = iframe.getBoundingClientRect();
+            const absX = iframeRect.left + e.clientX;
+            const absY = iframeRect.top + e.clientY;
+            const nx = Math.max(0, Math.min(1, (absX - overlayRect.left) / Math.max(1, overlayRect.width)));
+            const ny = Math.max(0, Math.min(1, (absY - overlayRect.top) / Math.max(1, overlayRect.height)));
+            ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
+          }
         }, { passive: true });
       } catch {
         // Not same-origin; ignore
@@ -365,13 +378,43 @@
       c.el.remove();
       cursors.delete(username);
     }
-    function moveCursor(username, nx, ny) {
+    function getOverlayStageRect() {
+      const iframe = $('editor');
+      try {
+        const childDoc = iframe.contentWindow.document;
+        const stage = childDoc.querySelector('.geDiagramContainer') || childDoc.querySelector('#geDiagramContainer');
+        if (!stage) return null;
+        const iframeRect = iframe.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        const overlayRect = $('overlay').getBoundingClientRect();
+        return {
+          left: (iframeRect.left + stageRect.left) - overlayRect.left,
+          top: (iframeRect.top + stageRect.top) - overlayRect.top,
+          width: stageRect.width,
+          height: stageRect.height
+        };
+      } catch { return null; }
+    }
+
+    function moveCursor(username, nx, ny, basis) {
       const c = cursors.get(username);
       if (!c) return;
       const overlay = $('overlay');
       const rect = overlay.getBoundingClientRect();
-      const x = nx * rect.width;
-      const y = ny * rect.height;
+      let x, y;
+      if (basis === 'stage') {
+        const s = getOverlayStageRect();
+        if (s) {
+          x = s.left + nx * s.width;
+          y = s.top + ny * s.height;
+        } else {
+          x = nx * rect.width;
+          y = ny * rect.height;
+        }
+      } else {
+        x = nx * rect.width;
+        y = ny * rect.height;
+      }
       c.el.style.left = x + 'px';
       c.el.style.top = y + 'px';
     }

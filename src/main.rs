@@ -51,22 +51,22 @@ struct Room {
 enum ClientWsMessage {
     Replace { version: u64, content: String },
     Ping,
-    Cursor { x: f32, y: f32 }, // normalized [0,1] within the iframe viewport
+    Cursor { x: f32, y: f32, basis: Option<String> }, // basis: "stage" or "overlay"
     Selection { ids: Vec<String> },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerWsMessage {
-    Init { version: u64, content: String },
-    Update { version: u64, content: String, username: String },
+    Init { version: u64, content: String, your_id: String },
+    Update { version: u64, content: String, username: String, sender_id: String },
     Error { message: String },
     Pong,
     PresenceSnapshot { users: Vec<PresenceUser> },
     PresenceJoin { username: String, color: String },
     PresenceLeave { username: String },
-    Cursor { username: String, x: f32, y: f32 },
-    Selection { username: String, ids: Vec<String> },
+    Cursor { username: String, x: f32, y: f32, basis: Option<String>, sender_id: String },
+    Selection { username: String, ids: Vec<String>, sender_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -465,12 +465,14 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
 
     // subscribe to room broadcast
     let mut rx = room.tx.subscribe();
+    // unique id for this connection
+    let conn_id = Uuid::new_v4().to_string();
 
     // send init snapshot
     {
         let content = room.content.read().await.clone();
         let version = room.version.load(std::sync::atomic::Ordering::SeqCst);
-        let init_msg = ServerWsMessage::Init { version, content };
+        let init_msg = ServerWsMessage::Init { version, content, your_id: conn_id.clone() };
         let _ = socket
             .send(WsRawMessage::Text(serde_json::to_string(&init_msg).unwrap()))
             .await;
@@ -530,14 +532,17 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
                                     version: new_version,
                                     content,
                                     username: username.clone(),
+                                    sender_id: conn_id.clone(),
                                 });
                             }
-                            Ok(ClientWsMessage::Cursor { x, y }) => {
+                            Ok(ClientWsMessage::Cursor { x, y, basis }) => {
                                 let x = x.clamp(0.0, 1.0);
                                 let y = y.clamp(0.0, 1.0);
                                 let _ = room.tx.send(ServerWsMessage::Cursor {
                                     username: username.clone(),
-                                    x, y
+                                    x, y,
+                                    basis,
+                                    sender_id: conn_id.clone(),
                                 });
                             }
                             Ok(ClientWsMessage::Ping) => {
@@ -551,6 +556,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
                                 let _ = room.tx.send(ServerWsMessage::Selection {
                                     username: username.clone(),
                                     ids,
+                                    sender_id: conn_id.clone(),
                                 });
                             }
                             Err(err) => {
