@@ -11,6 +11,38 @@
     .badge { padding: 2px 6px; border-radius: 100px; background: #233042; font-size: 12px; }
     #editor { width: 100%; height: calc(100% - 48px); border: 0; display: block; }
     button, a { background: #0e1116; color: #e5e5e5; border: 1px solid #2f3742; border-radius: 8px; padding: 8px 10px; text-decoration: none; }
+    #stage { position: relative; width: 100%; height: calc(100% - 48px); }
+    #overlay { position: absolute; inset: 0; pointer-events: none; }
+    .cursor {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0);
+      pointer-events: none;
+    }
+    .cursor .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.4);
+    }
+    .cursor .label {
+      position: absolute; top: 12px; left: 8px;
+      padding: 2px 6px; font-size: 11px; border-radius: 6px;
+      background: rgba(0,0,0,0.6); color: white;
+      white-space: nowrap;
+    }
+    .cursor .sel {
+      position: absolute; top: -16px; left: 8px;
+      padding: 1px 6px; font-size: 10px; border-radius: 6px;
+      background: rgba(0,0,0,0.6); color: #cbd5e1;
+      white-space: nowrap;
+      display: none;
+    }
+    .cursor .sel {
+      position: absolute; top: -16px; left: 8px;
+      padding: 1px 6px; font-size: 10px; border-radius: 6px;
+      background: rgba(0,0,0,0.6); color: #cbd5e1;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -25,7 +57,10 @@
       <a href="/" id="back">Back</a>
     </div>
   </header>
-  <iframe id="editor" allow="fullscreen" src="https://embed.diagrams.net/?embed=1&ui=min&proto=json&spin=1&noDevice=1&saveAndExit=1&xml=1"></iframe>
+  <div id="stage">
+    <iframe id="editor" allow="fullscreen" src="/diagrams/index.html?embed=1&ui=min&proto=json&spin=1&noDevice=1&saveAndExit=1&xml=1"></iframe>
+    <div id="overlay"></div>
+  </div>
   <script>
     const $ = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
@@ -38,6 +73,9 @@
     let isEditorReady = false;
     let lastXml = '';
     let selfUpdateToken = 0; // increments on our own WS sends to detect self echoes (best-effort)
+    let myUsername = 'guest';
+    const cursors = new Map(); // username -> {el, color, selEl}
+    let lastEmbedMoveAt = 0;
 
     async function refreshMe() {
       try {
@@ -45,8 +83,10 @@
         if (res.ok) {
           const me = await res.json();
           $('user').textContent = me.username;
+          myUsername = me.username;
         } else {
           $('user').textContent = 'guest';
+          myUsername = 'guest';
         }
       } catch {}
     }
@@ -82,6 +122,27 @@
             if (isEditorReady) {
               postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: fileName });
             }
+          } else if (msg.type === 'presence_snapshot') {
+            for (const u of msg.users || []) {
+              ensureCursor(u.username, u.color);
+            }
+          } else if (msg.type === 'presence_join') {
+            ensureCursor(msg.username, msg.color);
+          } else if (msg.type === 'presence_leave') {
+            removeCursor(msg.username);
+          } else if (msg.type === 'cursor') {
+            if (msg.username && msg.username !== myUsername) {
+              moveCursor(msg.username, msg.x, msg.y);
+            }
+          } else if (msg.type === 'selection') {
+            if (msg.username && msg.username !== myUsername) {
+              const c = cursors.get(msg.username);
+              if (c) {
+                const n = (msg.ids || []).length;
+                c.selEl.style.display = n > 0 ? 'block' : 'none';
+                c.selEl.textContent = n > 0 ? `${n} selected` : '';
+              }
+            }
           } else if (msg.type === 'update') {
             currentVersion = msg.version || currentVersion;
             $('version').textContent = 'v' + currentVersion;
@@ -102,9 +163,45 @@
       };
     }
 
+    function editorOrigin() {
+      const iframe = $('editor');
+      try {
+        const url = new URL(iframe.getAttribute('src'), window.location.origin);
+        return url.origin;
+      } catch {
+        return window.location.origin;
+      }
+    }
     function postToEditor(msg) {
       const iframe = $('editor');
-      iframe.contentWindow.postMessage(JSON.stringify(msg), 'https://embed.diagrams.net');
+      iframe.contentWindow.postMessage(JSON.stringify(msg), editorOrigin());
+    }
+
+    // If the iframe is same-origin (when you self-host draw.io), attach direct mouse tracking for precise cursors
+    function attachSameOriginMouseTracking() {
+      const iframe = $('editor');
+      try {
+        const childWin = iframe.contentWindow;
+        const childDoc = childWin.document;
+        // Accessing childDoc will throw if cross-origin; guard with try/catch
+        if (!childDoc) return;
+        let lastSentLocal = 0;
+        childDoc.addEventListener('mousemove', (e) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          const now = performance.now();
+          if (now - lastSentLocal < 33) return;
+          lastSentLocal = now;
+          const overlayRect = $('overlay').getBoundingClientRect();
+          const iframeRect = iframe.getBoundingClientRect();
+          const absX = iframeRect.left + e.clientX;
+          const absY = iframeRect.top + e.clientY;
+          const nx = Math.max(0, Math.min(1, (absX - overlayRect.left) / Math.max(1, overlayRect.width)));
+          const ny = Math.max(0, Math.min(1, (absY - overlayRect.top) / Math.max(1, overlayRect.height)));
+          ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
+        }, { passive: true });
+      } catch {
+        // Not same-origin; ignore
+      }
     }
 
     // Listen to messages from the editor
@@ -125,7 +222,34 @@
         if (lastXml !== null) {
           postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: fileName });
         }
+        // Request event stream (selection/mouse) from embed
+        try {
+          postToEditor({ action: 'configure', config: { listen: true, events: true, eventsEnabled: true } });
+        } catch {}
+        // Try to attach direct listeners if same-origin
+        attachSameOriginMouseTracking();
         return;
+      }
+      // Selection changes from editor (best-effort API)
+      if (data.event === 'selectionChanged' && Array.isArray(data.cells)) {
+        try {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            const ids = data.cells.map(c => (c && typeof c === 'object') ? (c.id || '') : (typeof c === 'string' ? c : '')).filter(Boolean);
+            ws.send(JSON.stringify({ type: 'selection', ids }));
+          }
+        } catch {}
+      }
+      // Mouse move events from embed; forward if present
+      if ((data.event === 'mouseMove' || data.event === 'mousemove' || data.action === 'mouseMove') && typeof data.x === 'number' && typeof data.y === 'number') {
+        try {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            const rect = $('overlay').getBoundingClientRect();
+            const nx = Math.max(0, Math.min(1, (data.x - rect.left) / Math.max(1, rect.width)));
+            const ny = Math.max(0, Math.min(1, (data.y - rect.top) / Math.max(1, rect.height)));
+            ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
+            lastEmbedMoveAt = performance.now();
+          }
+        } catch {}
       }
       // The editor asks us to save current XML
       if (data.event === 'save' || data.action === 'save' || data.event === 'autosave') {
@@ -208,7 +332,66 @@
     });
 
     $('editor').addEventListener('load', () => {
+      // Attempt same-origin tracking as soon as the iframe loads
+      attachSameOriginMouseTracking();
       // The editor will send 'init' shortly; we don't send 'load' until then
+    });
+
+    // Presence cursors
+    function ensureCursor(username, color) {
+      if (username === myUsername) return;
+      if (cursors.has(username)) return;
+      const el = document.createElement('div');
+      el.className = 'cursor';
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+      dot.style.background = color;
+      dot.style.borderColor = color;
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = username;
+      const selEl = document.createElement('div');
+      selEl.className = 'sel';
+      selEl.style.display = 'none';
+      el.appendChild(dot);
+      el.appendChild(label);
+      el.appendChild(selEl);
+      $('overlay').appendChild(el);
+      cursors.set(username, { el, color, selEl });
+    }
+    function removeCursor(username) {
+      const c = cursors.get(username);
+      if (!c) return;
+      c.el.remove();
+      cursors.delete(username);
+    }
+    function moveCursor(username, nx, ny) {
+      const c = cursors.get(username);
+      if (!c) return;
+      const overlay = $('overlay');
+      const rect = overlay.getBoundingClientRect();
+      const x = nx * rect.width;
+      const y = ny * rect.height;
+      c.el.style.left = x + 'px';
+      c.el.style.top = y + 'px';
+    }
+    // Fallback: parent-document tracking for when embed doesn't emit mouseMove
+    let lastSent = 0;
+    document.addEventListener('mousemove', (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const now = performance.now();
+      // If we recently received an embed mouse event, skip fallback to avoid double-sends
+      if (now - lastEmbedMoveAt < 80) return;
+      if (now - lastSent < 33) return; // ~30fps throttle
+      const overlay = $('overlay');
+      const rect = overlay.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+      lastSent = now;
+      const nx = x / Math.max(1, rect.width);
+      const ny = y / Math.max(1, rect.height);
+      ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
     });
 
     refreshMe();

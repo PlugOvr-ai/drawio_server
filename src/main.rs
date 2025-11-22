@@ -43,6 +43,7 @@ struct Room {
     tx: broadcast::Sender<ServerWsMessage>,
     content: RwLock<String>,
     version: AtomicU64,
+    members: DashMap<String, String>, // username -> color hex
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -50,6 +51,8 @@ struct Room {
 enum ClientWsMessage {
     Replace { version: u64, content: String },
     Ping,
+    Cursor { x: f32, y: f32 }, // normalized [0,1] within the iframe viewport
+    Selection { ids: Vec<String> },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -59,6 +62,17 @@ enum ServerWsMessage {
     Update { version: u64, content: String, username: String },
     Error { message: String },
     Pong,
+    PresenceSnapshot { users: Vec<PresenceUser> },
+    PresenceJoin { username: String, color: String },
+    PresenceLeave { username: String },
+    Cursor { username: String, x: f32, y: f32 },
+    Selection { username: String, ids: Vec<String> },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PresenceUser {
+    username: String,
+    color: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -253,6 +267,7 @@ async fn ensure_room_loaded(state: &AppState, file_key: &str) -> anyhow::Result<
         tx,
         content: RwLock::new(content),
         version: AtomicU64::new(0),
+        members: DashMap::new(),
     });
     let inserted = state.rooms.insert(file_key.to_string(), room.clone());
     if inserted.is_some() {
@@ -397,6 +412,43 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_ws(socket, state, username, file_key))
 }
 
+fn color_for_username(username: &str) -> String {
+    // Deterministic color from username: simple hash to HSL then convert to hex (approximate with fixed saturation/lightness)
+    let mut hash = 0u32;
+    for b in username.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    let hue = (hash % 360) as f32;
+    let (s, l) = (0.65f32, 0.55f32);
+    hsl_to_hex(hue, s, l)
+}
+
+fn hsl_to_hex(h: f32, s: f32, l: f32) -> String {
+    // Convert HSL to RGB then hex; simple implementation
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - (((h / 60.0) % 2.0) - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r1, g1, b1) = if (0.0..60.0).contains(&h) {
+        (c, x, 0.0)
+    } else if (60.0..120.0).contains(&h) {
+        (x, c, 0.0)
+    } else if (120.0..180.0).contains(&h) {
+        (0.0, c, x)
+    } else if (180.0..240.0).contains(&h) {
+        (0.0, x, c)
+    } else if (240.0..300.0).contains(&h) {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let (r, g, b) = (
+        ((r1 + m) * 255.0).round() as u8,
+        ((g1 + m) * 255.0).round() as u8,
+        ((b1 + m) * 255.0).round() as u8,
+    );
+    format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
 async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, file_key: String) {
     let Ok(room) = ensure_room_loaded(&state, &file_key).await else {
         let _ = socket
@@ -422,6 +474,31 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
         let _ = socket
             .send(WsRawMessage::Text(serde_json::to_string(&init_msg).unwrap()))
             .await;
+    }
+
+    // send presence snapshot and announce join
+    {
+        // record member with color
+        let color = color_for_username(&username);
+        room.members.insert(username.clone(), color.clone());
+        let snapshot = room
+            .members
+            .iter()
+            .filter(|e| e.key() != &username)
+            .map(|e| PresenceUser {
+                username: e.key().clone(),
+                color: e.value().clone(),
+            })
+            .collect::<Vec<_>>();
+        let _ = socket
+            .send(WsRawMessage::Text(
+                serde_json::to_string(&ServerWsMessage::PresenceSnapshot { users: snapshot }).unwrap(),
+            ))
+            .await;
+        let _ = room.tx.send(ServerWsMessage::PresenceJoin {
+            username: username.clone(),
+            color,
+        });
     }
 
     let (mut sender, mut receiver) = socket.split();
@@ -455,12 +532,26 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
                                     username: username.clone(),
                                 });
                             }
+                            Ok(ClientWsMessage::Cursor { x, y }) => {
+                                let x = x.clamp(0.0, 1.0);
+                                let y = y.clamp(0.0, 1.0);
+                                let _ = room.tx.send(ServerWsMessage::Cursor {
+                                    username: username.clone(),
+                                    x, y
+                                });
+                            }
                             Ok(ClientWsMessage::Ping) => {
                                 let _ = sender
                                     .send(WsRawMessage::Text(
                                         serde_json::to_string(&ServerWsMessage::Pong).unwrap(),
                                     ))
                                     .await;
+                            }
+                            Ok(ClientWsMessage::Selection { ids }) => {
+                                let _ = room.tx.send(ServerWsMessage::Selection {
+                                    username: username.clone(),
+                                    ids,
+                                });
                             }
                             Err(err) => {
                                 let _ = sender
@@ -507,6 +598,10 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
             }
         }
     }
+
+    // on disconnect: announce leave
+    room.members.remove(&username);
+    let _ = room.tx.send(ServerWsMessage::PresenceLeave { username });
 }
 
 
