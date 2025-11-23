@@ -55,11 +55,61 @@
     </div>
     <div class="row">
       <a href="/" id="back">Back</a>
+      <button id="ai-open">AI Modify</button>
     </div>
   </header>
   <div id="stage">
     <iframe id="editor" allow="fullscreen" src="/diagrams/index.html?embed=1&ui=min&proto=json&spin=1&noDevice=1&saveAndExit=1&xml=1"></iframe>
     <div id="overlay"></div>
+  </div>
+  <div id="ai-activity" style="display:none; position: fixed; right: 12px; top: 60px; width: 320px; max-height: 40vh; overflow: auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); z-index: 80;">
+    <div style="display:flex; align-items:center; justify-content: space-between; margin-bottom: 6px;">
+      <strong style="font-size: 13px;">AI activity</strong>
+      <button id="ai-activity-close" style="font-size:12px;">Hide</button>
+    </div>
+    <div id="ai-activity-log" style="font-size: 12px; color:#374151; display:grid; gap:4px;"></div>
+    <pre id="ai-activity-stream" style="margin-top:6px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:8px; font-size:12px; color:#111827; white-space:pre-wrap; word-break:break-word; max-height:22vh; overflow:auto;"></pre>
+  </div>
+  <!-- AI Modal -->
+  <div id="ai-backdrop" style="display:none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 60;"></div>
+  <div id="ai-modal" style="display:none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(720px, 94vw); background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; z-index: 70;">
+    <div style="display:flex; align-items:center; justify-content: space-between; margin-bottom: 8px;">
+      <strong>AI Modify Diagram</strong>
+      <button id="ai-close">Close</button>
+    </div>
+    <div style="display:grid; gap: 8px;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <label style="display:grid; gap:4px;">
+          <span style="font-size:12px; color:#6b7280;">Provider</span>
+          <select id="ai-provider">
+            <option value="openrouter">OpenRouter</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span style="font-size:12px; color:#6b7280;">Model</span>
+          <input id="ai-model" placeholder="e.g., openrouter/anthropic/claude-3.5-sonnet or llama3.1:latest" />
+        </label>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <label style="display:grid; gap:4px;">
+          <span style="font-size:12px; color:#6b7280;">Temperature (optional)</span>
+          <input id="ai-temp" placeholder="e.g., 0.2" />
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span style="font-size:12px; color:#6b7280;">System prompt (optional)</span>
+          <input id="ai-system" placeholder="Override system instruction (optional)" />
+        </label>
+      </div>
+      <label style="display:grid; gap:4px;">
+        <span style="font-size:12px; color:#6b7280;">Instruction</span>
+        <textarea id="ai-prompt" rows="8" placeholder="Describe how to modify the diagram (add nodes/edges, rename, layout changes, etc.)" style="width:100%;"></textarea>
+      </label>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="ai-run">Run</button>
+      </div>
+      <div id="ai-hint" style="font-size:12px; color:#6b7280;">OpenRouter requires environment variable OPENROUTER_API_KEY on the server. Ollama defaults to http://localhost:11434 (override with OLLAMA_URL).</div>
+    </div>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -77,6 +127,7 @@
     let myClientId = null;
     const cursors = new Map(); // username -> {el, color, selEl}
     let lastEmbedMoveAt = 0;
+    const aiJobs = new Map(); // job_id -> {lastPhase, createdAt}
 
     async function refreshMe() {
       try {
@@ -151,15 +202,45 @@
             currentVersion = msg.version || currentVersion;
             $('version').textContent = 'v' + currentVersion;
             if (msg.content && msg.content !== lastXml) {
+              const isAiUpdate = msg.username === 'ai';
+              const isExternalUpdate = msg.username === 'external';
+              console.log(`[WS] Update from ${msg.username}, isAI: ${isAiUpdate}, isExternal: ${isExternalUpdate}, content length: ${msg.content.length}, prev length: ${lastXml.length}`);
               lastXml = msg.content;
-              // Try merge first; editor will attempt in-place merge with unsaved changes.
-              // Fallback: reload if merge is not supported by the embed.
-              try {
-                postToEditor({ action: 'merge', xml: lastXml });
-              } catch {
+              // For AI updates and external updates, always reload (not merge) since content is completely regenerated
+              // For human updates, try merge first, then fallback to reload
+              if (isAiUpdate) {
+                // Always reload for AI updates
+                console.log('[WS] Reloading editor with AI-generated XML');
+                $('status').textContent = 'AI update received, reloading...';
                 postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: filePath });
+                // Show visual feedback
+                setTimeout(() => {
+                  $('status').textContent = 'AI update applied';
+                  setTimeout(() => { $('status').textContent = 'Connected'; }, 2000);
+                }, 500);
+              } else if (isExternalUpdate) {
+                // Always reload for external file changes
+                console.log('[WS] Reloading editor with externally modified file');
+                $('status').textContent = 'File changed externally, reloading...';
+                postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: filePath });
+                // Show visual feedback
+                setTimeout(() => {
+                  $('status').textContent = 'External change applied';
+                  setTimeout(() => { $('status').textContent = 'Connected'; }, 2000);
+                }, 500);
+              } else {
+                // Try merge first for human updates; fallback to reload
+                try {
+                  postToEditor({ action: 'merge', xml: lastXml });
+                } catch {
+                  postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: filePath });
+                }
               }
+            } else {
+              console.log(`[WS] Update ignored: content same or empty (same: ${msg.content === lastXml})`);
             }
+          } else if (msg.type === 'ai_status') {
+            addAiActivity(msg.job_id, msg.phase, msg.detail);
           }
         } catch (e) {
           console.error('bad ws message', e, ev.data);
@@ -180,6 +261,110 @@
       const iframe = $('editor');
       iframe.contentWindow.postMessage(JSON.stringify(msg), editorOrigin());
     }
+
+    // AI Modal controls
+    const aiOpen = $('ai-open');
+    const aiClose = $('ai-close');
+    const aiBackdrop = $('ai-backdrop');
+    const aiModal = $('ai-modal');
+    const aiRun = $('ai-run');
+    const aiProvider = $('ai-provider');
+    const aiModel = $('ai-model');
+    const aiTemp = $('ai-temp');
+    const aiSystem = $('ai-system');
+    const aiPrompt = $('ai-prompt');
+    const aiActivity = $('ai-activity');
+    const aiActivityLog = $('ai-activity-log');
+    const aiActivityClose = $('ai-activity-close');
+    const aiActivityStream = $('ai-activity-stream');
+    function openAi() {
+      aiModal.style.display = 'block';
+      aiBackdrop.style.display = 'block';
+      if (!aiModel.value) {
+        aiModel.value = aiProvider.value === 'openrouter' ? 'openrouter/anthropic/claude-3.5-sonnet' : 'llama3.1:latest';
+      }
+      aiPrompt.focus();
+    }
+    function closeAi() {
+      aiModal.style.display = 'none';
+      aiBackdrop.style.display = 'none';
+    }
+    function showAiActivity() {
+      aiActivity.style.display = 'block';
+    }
+    function hideAiActivity() {
+      aiActivity.style.display = 'none';
+    }
+    function addAiActivity(jobId, phase, detail) {
+      showAiActivity();
+      if (phase === 'stream') {
+        // Append streaming content into the pre block
+        aiActivityStream.textContent += detail;
+        aiActivityStream.scrollTop = aiActivityStream.scrollHeight;
+        return;
+      }
+      const row = document.createElement('div');
+      const t = new Date();
+      const hh = `${t.getHours()}`.padStart(2,'0');
+      const mm = `${t.getMinutes()}`.padStart(2,'0');
+      const ss = `${t.getSeconds()}`.padStart(2,'0');
+      const stamp = `${hh}:${mm}:${ss}`;
+      row.textContent = `[${stamp}] ${phase}: ${detail}`;
+      aiActivityLog.appendChild(row);
+      aiActivityLog.scrollTop = aiActivityLog.scrollHeight;
+      aiJobs.set(jobId, { lastPhase: phase, createdAt: Date.now() });
+      if (phase === 'done' || phase === 'error') {
+        // auto-hide after a short delay
+        setTimeout(() => {
+          if (aiActivity.style.display !== 'none') {
+            hideAiActivity();
+            aiActivityLog.innerHTML = '';
+            aiActivityStream.textContent = '';
+          }
+        }, 5000);
+      }
+    }
+    if (aiOpen) aiOpen.onclick = (e) => { e.preventDefault(); openAi(); };
+    if (aiClose) aiClose.onclick = closeAi;
+    if (aiBackdrop) aiBackdrop.onclick = closeAi;
+    if (aiActivityClose) aiActivityClose.onclick = hideAiActivity;
+    if (aiRun) aiRun.onclick = async () => {
+      if (!filePath) { alert('No file open'); return; }
+      const prompt = aiPrompt.value.trim();
+      if (!prompt) { alert('Enter an instruction'); return; }
+      const provider = aiProvider.value;
+      const model = aiModel.value.trim();
+      if (!model) { alert('Enter a model'); return; }
+      const temperature = aiTemp.value.trim() ? parseFloat(aiTemp.value.trim()) : undefined;
+      const system = aiSystem.value.trim() || undefined;
+      $('status').textContent = 'AI working...';
+      showAiActivity();
+      addAiActivity('local', 'request', `Sending to ${provider} (${model})`);
+      try {
+        const res = await fetch(`/api/ai_modify?path=${encodeURIComponent(filePath)}`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, provider, model, temperature, system })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const out = await res.json();
+        // The server will broadcast via WS; but in case no WS, apply locally.
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          lastXml = out.content || '';
+          postToEditor({ action: 'load', autosave: 1, modified: 'unsavedChanges', xml: lastXml, title: filePath });
+          $('version').textContent = 'v' + (out.version || currentVersion);
+        }
+        $('status').textContent = 'AI applied';
+        closeAi();
+        addAiActivity('local', 'completed', 'Applied changes');
+      } catch (e) {
+        console.error(e);
+        $('status').textContent = 'AI error';
+        alert('AI error: ' + (e?.message || e));
+        addAiActivity('local', 'error', e?.message || 'error');
+      }
+    };
 
     // If the iframe is same-origin (when you self-host draw.io), attach direct mouse tracking for precise cursors
     function attachSameOriginMouseTracking() {

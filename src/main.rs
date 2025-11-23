@@ -32,6 +32,10 @@ use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use tracing::{error, info, Level};
 use uuid::Uuid;
 use clap::Parser;
+use reqwest::Client;
+use notify::{Watcher, RecommendedWatcher, RecursiveMode, Event, EventKind, Config};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct AppState {
@@ -40,6 +44,7 @@ struct AppState {
     data_dir: Arc<PathBuf>,
     auth_token: String,
     require_token: bool,
+    writing_files: Arc<DashMap<String, Instant>>, // file_key -> timestamp when we started writing
 }
 
 struct Room {
@@ -70,6 +75,7 @@ enum ServerWsMessage {
     PresenceLeave { username: String },
     Cursor { username: String, x: f32, y: f32, basis: Option<String>, sender_id: String },
     Selection { username: String, ids: Vec<String>, sender_id: String },
+    AiStatus { username: String, job_id: String, phase: String, detail: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -174,10 +180,19 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         sessions: Arc::new(DashMap::new()),
         rooms: Arc::new(DashMap::new()),
-        data_dir: Arc::new(data_dir),
+        data_dir: Arc::new(data_dir.clone()),
         auth_token,
         require_token,
+        writing_files: Arc::new(DashMap::new()),
     };
+    
+    // Start file watcher task
+    let watcher_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = watch_files(watcher_state, data_dir).await {
+            error!("file watcher error: {e:?}");
+        }
+    });
 
     let app = Router::new()
         .route("/", get(root_page))
@@ -195,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/rename", post(api_rename))
         .route("/api/mkdir", post(api_mkdir))
         .route("/api/download", get(api_download))
+        .route("/api/ai_modify", post(api_ai_modify))
         .route("/raw/:name", get(get_raw_file))
         .route("/ws/:name", get(ws_handler))
         .fallback_service(
@@ -557,6 +573,7 @@ async fn put_file(
                 let _new_ver = room.version.fetch_add(1, Ordering::SeqCst) + 1;
             }
             let path = to_data_path(&state.data_dir, &file_key);
+            mark_file_writing(&state, &file_key);
             if let Err(err) = fs::write(&path, req.content.as_bytes()).await {
                 error!("write file error: {err:?}");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -802,6 +819,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
                                 let new_version = room.version.load(Ordering::SeqCst);
                                 // persist
                                 let path = to_data_path(&state.data_dir, &file_key);
+                                mark_file_writing(&state, &file_key);
                                 if let Err(err) = fs::write(&path, content.as_bytes()).await {
                                     error!("ws write file error: {err:?}");
                                 }
@@ -1021,6 +1039,7 @@ async fn api_put_file(
             room.version.fetch_add(1, Ordering::SeqCst);
         }
     }
+    mark_file_writing(&state, &safe);
     if let Err(_) = fs::write(&pb, req.content.as_bytes()).await {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -1125,5 +1144,744 @@ async fn api_download(
         resp.headers_mut().insert(axum::http::header::CONTENT_DISPOSITION, val);
     }
     resp
+}
+
+
+// ----- AI Modify -----
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AiProvider {
+    Openrouter,
+    Ollama,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AiModifyRequest {
+    prompt: String,
+    provider: AiProvider,
+    model: String,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    system: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AiModifyResponse {
+    version: u64,
+    content: String,
+}
+
+fn extract_xml(input: &str) -> Option<String> {
+    // Strip code fences if present (handles both ``` and ''')
+    let mut s = input.trim();
+    
+    // Handle triple backticks (```) or triple single quotes (''')
+    if s.starts_with("```") {
+        // Find the first newline after the opening fence (may have language identifier like "xml")
+        if let Some(start) = s.find('\n') {
+            s = &s[start + 1..];
+            // Find closing fence
+            if let Some(end) = s.rfind("```") {
+                s = &s[..end];
+            }
+        }
+        s = s.trim();
+    } else if s.starts_with("'''") {
+        // Handle triple single quotes (''')
+        if let Some(start) = s.find('\n') {
+            s = &s[start + 1..];
+            // Find closing fence
+            if let Some(end) = s.rfind("'''") {
+                s = &s[..end];
+            }
+        }
+        s = s.trim();
+    }
+    
+    // Find xml span - look for <?xml or <mxfile
+    let start_pos = s.find("<?xml").or_else(|| s.find("<mxfile"))?;
+    let end_tag = "</mxfile>";
+    let end_pos = s[start_pos..].rfind(end_tag)?;
+    let end_idx = start_pos + end_pos + end_tag.len();
+    let out = &s[start_pos..end_idx];
+    let xml = out.trim().to_string();
+    
+    // Basic XML validation: check for well-formed structure
+    if !validate_xml_basic(&xml) {
+        return None;
+    }
+    
+    Some(xml)
+}
+
+fn validate_xml_basic(xml: &str) -> bool {
+    // Check that it starts with <?xml or <mxfile
+    if !xml.starts_with("<?xml") && !xml.starts_with("<mxfile") {
+        return false;
+    }
+    // Check that it ends with </mxfile>
+    if !xml.trim_end().ends_with("</mxfile>") {
+        return false;
+    }
+    // Basic check: count opening and closing mxfile tags (must match)
+    let open_count = xml.matches("<mxfile").count();
+    let close_count = xml.matches("</mxfile>").count();
+    if open_count != close_count || open_count == 0 {
+        return false;
+    }
+    // Check for basic XML structure: must have at least one <diagram> or <mxGraphModel>
+    if !xml.contains("<diagram") && !xml.contains("<mxGraphModel") {
+        return false;
+    }
+    true
+}
+
+async fn call_openrouter(model: &str, sys: &str, user: &str, temperature: Option<f32>) -> anyhow::Result<String> {
+    let key = std::env::var("OPENROUTER_API_KEY")
+        .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY not set"))?;
+    let client = Client::new();
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role":"system","content": sys},
+            {"role":"user","content": user}
+        ]
+    });
+    if let Some(t) = temperature {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("temperature".to_string(), serde_json::json!(t));
+        }
+    }
+    let resp = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .bearer_auth(key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("openrouter error: {}", txt));
+    }
+    let json: serde_json::Value = resp.json().await?;
+    let content = json
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("no content in openrouter response"))?;
+    Ok(content.to_string())
+}
+
+async fn call_ollama(model: &str, sys: &str, user: &str, temperature: Option<f32>) -> anyhow::Result<String> {
+    let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434/api/chat".to_string());
+    let client = Client::new();
+    // Try chat endpoint
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role":"system","content": sys},
+            {"role":"user","content": user}
+        ],
+        "stream": false
+    });
+    if let Some(t) = temperature {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("options".to_string(), serde_json::json!({ "temperature": t }));
+        }
+    }
+    let resp = client.post(&url).json(&body).send().await?;
+    if !resp.status().is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("ollama error: {}", txt));
+    }
+    let json: serde_json::Value = resp.json().await?;
+    // Prefer chat message.content; fallback to response field (for generate)
+    if let Some(s) = json.pointer("/message/content").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    if let Some(s) = json.get("response").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    Err(anyhow::anyhow!("no content in ollama response"))
+}
+
+async fn stream_openrouter(
+    model: &str,
+    sys: &str,
+    user: &str,
+    temperature: Option<f32>,
+    tx: broadcast::Sender<ServerWsMessage>,
+    job_id: &str,
+) -> anyhow::Result<String> {
+    let key = std::env::var("OPENROUTER_API_KEY")
+        .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY not set"))?;
+    let client = Client::new();
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role":"system","content": sys},
+            {"role":"user","content": user}
+        ],
+        "stream": true
+    });
+    if let Some(t) = temperature {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("temperature".to_string(), serde_json::json!(t));
+        }
+    }
+    let resp = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .bearer_auth(key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("openrouter error: {}", txt));
+    }
+    let mut acc = String::new();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?;
+        let s = String::from_utf8_lossy(&bytes);
+        buf.push_str(&s);
+        // SSE events separated by \n\n
+        loop {
+            if let Some(idx) = buf.find("\n\n") {
+                let event = buf[..idx].to_string();
+                buf.drain(..idx + 2);
+                for line in event.lines() {
+                    let line = line.trim_start();
+                    if let Some(rest) = line.strip_prefix("data: ") {
+                        if rest.trim() == "[DONE]" {
+                            return Ok(acc);
+                        }
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(rest) {
+                            // OpenAI-style delta
+                            if let Some(delta) = json
+                                .pointer("/choices/0/delta/content")
+                                .and_then(|v| v.as_str())
+                            {
+                                acc.push_str(delta);
+                                let _ = tx.send(ServerWsMessage::AiStatus {
+                                    username: "ai".to_string(),
+                                    job_id: job_id.to_string(),
+                                    phase: "stream".to_string(),
+                                    detail: delta.to_string(),
+                                });
+                            } else if let Some(done_content) = json
+                                .pointer("/choices/0/message/content")
+                                .and_then(|v| v.as_str())
+                            {
+                                // Some providers send the full content at end
+                                acc.push_str(done_content);
+                                let _ = tx.send(ServerWsMessage::AiStatus {
+                                    username: "ai".to_string(),
+                                    job_id: job_id.to_string(),
+                                    phase: "stream".to_string(),
+                                    detail: done_content.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    Ok(acc)
+}
+
+async fn stream_ollama(
+    model: &str,
+    sys: &str,
+    user: &str,
+    temperature: Option<f32>,
+    tx: broadcast::Sender<ServerWsMessage>,
+    job_id: &str,
+) -> anyhow::Result<String> {
+    let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434/api/chat".to_string());
+    let client = Client::new();
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role":"system","content": sys},
+            {"role":"user","content": user}
+        ],
+        "stream": true
+    });
+    if let Some(t) = temperature {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("options".to_string(), serde_json::json!({ "temperature": t }));
+        }
+    }
+    let resp = client.post(&url).json(&body).send().await?;
+    if !resp.status().is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("ollama error: {}", txt));
+    }
+    let mut acc = String::new();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?;
+        let s = String::from_utf8_lossy(&bytes);
+        buf.push_str(&s);
+        // Ollama streams JSON objects separated by newlines
+        loop {
+            if let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].to_string();
+                buf.drain(..pos + 1);
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        // final chunk may contain "message" with entire content too; we already accumulated
+                        break;
+                    }
+                    if let Some(delta) = json
+                        .pointer("/message/content")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| json.get("response").and_then(|v| v.as_str()))
+                    {
+                        acc.push_str(delta);
+                        let _ = tx.send(ServerWsMessage::AiStatus {
+                            username: "ai".to_string(),
+                            job_id: job_id.to_string(),
+                            phase: "stream".to_string(),
+                            detail: delta.to_string(),
+                        });
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    Ok(acc)
+}
+async fn api_ai_modify(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    Json(req): Json<AiModifyRequest>,
+) -> impl IntoResponse {
+    // Auth check
+    let Some(_u) = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    // Path required in query (?path=...)
+    let Some(path) = q.get("path") else {
+        return (StatusCode::BAD_REQUEST, "missing path").into_response();
+    };
+    let Some(safe) = sanitize_rel_path(path) else {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    };
+    // Load current content via room
+    let room = match ensure_room_loaded(&state, &safe).await {
+        Ok(r) => r,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let current_xml = { room.content.read().await.clone() };
+    let job_id = Uuid::new_v4().to_string();
+    let _ = room.tx.send(ServerWsMessage::AiStatus {
+        username: "ai".to_string(),
+        job_id: job_id.clone(),
+        phase: "started".to_string(),
+        detail: "Preparing prompt".to_string(),
+    });
+    // Compose prompts
+    let sys = req.system.clone().unwrap_or_else(|| {
+        "You are a precise draw.io (.drawio) diagram editor. Receive the full .drawio XML and the user instruction, apply the changes, and return ONLY the full updated .drawio XML. Do not include explanations, markdown, or code fences.".to_string()
+    });
+    let user = format!(
+        "Instruction:\n{}\n\nCurrent .drawio XML:\n{}",
+        req.prompt, current_xml
+    );
+    // Call provider
+    let _ = room.tx.send(ServerWsMessage::AiStatus {
+        username: "ai".to_string(),
+        job_id: job_id.clone(),
+        phase: "calling_provider".to_string(),
+        detail: format!("provider={:?}, model={}", req.provider, req.model),
+    });
+    let ai_result = match req.provider {
+        AiProvider::Openrouter => stream_openrouter(&req.model, &sys, &user, req.temperature, room.tx.clone(), &job_id).await,
+        AiProvider::Ollama => stream_ollama(&req.model, &sys, &user, req.temperature, room.tx.clone(), &job_id).await,
+    };
+    let raw = match ai_result {
+        Ok(s) => {
+            let _ = room.tx.send(ServerWsMessage::AiStatus {
+                username: "ai".to_string(),
+                job_id: job_id.clone(),
+                phase: "received".to_string(),
+                detail: format!("received {} chars", s.len()),
+            });
+            s
+        }
+        Err(err) => {
+            let _ = room.tx.send(ServerWsMessage::AiStatus {
+                username: "ai".to_string(),
+                job_id: job_id.clone(),
+                phase: "error".to_string(),
+                detail: format!("provider error: {err}"),
+            });
+            return (StatusCode::BAD_GATEWAY, format!("ai error: {err}")).into_response();
+        }
+    };
+    let _ = room.tx.send(ServerWsMessage::AiStatus {
+        username: "ai".to_string(),
+        job_id: job_id.clone(),
+        phase: "parsing".to_string(),
+        detail: "Extracting .drawio XML from response".to_string(),
+    });
+    let Some(new_xml) = extract_xml(&raw) else {
+        // Show first 500 chars of raw response for debugging
+        let preview = if raw.len() > 500 {
+            format!("{}...", &raw[..500])
+        } else {
+            raw.clone()
+        };
+        let error_detail = format!("AI did not return valid .drawio XML. Received: {}", preview);
+        error!("extract_xml failed. Raw length: {}, preview: {}", raw.len(), preview);
+        let _ = room.tx.send(ServerWsMessage::AiStatus {
+            username: "ai".to_string(),
+            job_id: job_id.clone(),
+            phase: "error".to_string(),
+            detail: error_detail.clone(),
+        });
+        return (StatusCode::BAD_GATEWAY, error_detail).into_response();
+    };
+    info!("extract_xml succeeded. Extracted XML length: {}, starts with: {}", new_xml.len(), &new_xml[..new_xml.len().min(100)]);
+    // Update room, persist, broadcast
+    {
+        let mut guard = room.content.write().await;
+        let old_len = guard.len();
+        *guard = new_xml.clone();
+        room.version.fetch_add(1, Ordering::SeqCst);
+        info!("Room updated: old length {}, new length {}, version {}", old_len, new_xml.len(), room.version.load(Ordering::SeqCst));
+    }
+    let _ = room.tx.send(ServerWsMessage::AiStatus {
+        username: "ai".to_string(),
+        job_id: job_id.clone(),
+        phase: "updating".to_string(),
+        detail: "Persisting file and broadcasting update".to_string(),
+    });
+    let version = room.version.load(Ordering::SeqCst);
+    let pb = to_data_rel_path(&state.data_dir, &safe);
+    if let Some(parent) = pb.parent() {
+        let _ = fs::create_dir_all(parent).await;
+    }
+    mark_file_writing(&state, &safe);
+    if let Err(e) = fs::write(&pb, new_xml.as_bytes()).await {
+        error!("ai_modify write error: {e:?}");
+        let _ = room.tx.send(ServerWsMessage::AiStatus {
+            username: "ai".to_string(),
+            job_id: job_id.clone(),
+            phase: "error".to_string(),
+            detail: "Failed to write updated file".to_string(),
+        });
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    info!("Broadcasting AI update: version {}, content length {}", version, new_xml.len());
+    let _ = room.tx.send(ServerWsMessage::Update {
+        version,
+        content: new_xml.clone(),
+        username: "ai".to_string(),
+        sender_id: "ai".to_string(),
+    });
+    let _ = room.tx.send(ServerWsMessage::AiStatus {
+        username: "ai".to_string(),
+        job_id: job_id.clone(),
+        phase: "done".to_string(),
+        detail: "AI modification applied".to_string(),
+    });
+    Json(AiModifyResponse { version, content: new_xml }).into_response()
+}
+
+// ----- File Watcher Helpers -----
+
+fn mark_file_writing(state: &AppState, file_key: &str) {
+    state.writing_files.insert(file_key.to_string(), Instant::now());
+    // Clean up old entries (older than 5 seconds) in background
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let cutoff = Instant::now() - Duration::from_secs(5);
+        state_clone.writing_files.retain(|_, &mut time| time > cutoff);
+    });
+}
+
+// ----- File Watcher -----
+
+async fn watch_files(state: AppState, data_dir: PathBuf) -> anyhow::Result<()> {
+    use std::sync::mpsc;
+    use tokio::sync::mpsc as tokio_mpsc;
+    
+    // Convert to absolute path for proper path comparison
+    let data_dir_abs = data_dir.canonicalize().unwrap_or_else(|_| {
+        // If canonicalize fails (e.g., path doesn't exist yet), use current_dir + relative path
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(&data_dir)
+            .canonicalize()
+            .unwrap_or(data_dir.clone())
+    });
+    
+    let (notify_tx, notify_rx) = mpsc::channel();
+    let mut watcher: RecommendedWatcher = Watcher::new(notify_tx, Config::default())?;
+    watcher.watch(&data_dir_abs, RecursiveMode::Recursive)?;
+    info!("File watcher started for {} (recursive mode - watching all subdirectories)", data_dir_abs.display());
+    
+    // Verify the watcher is set up correctly by checking if we can watch
+    // Note: On some platforms, recursive watching might have limitations
+    // If files in new subdirectories aren't detected, we might need to re-watch
+    
+    // Bridge from blocking channel to async channel
+    let (async_tx, mut async_rx) = tokio_mpsc::unbounded_channel();
+    
+    // Spawn blocking task to bridge from blocking notify channel to async channel
+    tokio::task::spawn_blocking(move || {
+        loop {
+            match notify_rx.recv() {
+                Ok(event_result) => {
+                    info!("File watcher bridge: received event from notify, sending to async channel");
+                    // Send to async channel - this is safe because unbounded_channel::send is non-blocking
+                    if async_tx.send(event_result).is_err() {
+                        error!("File watcher bridge: failed to send to async channel (receiver dropped)");
+                        break;
+                    } else {
+                        info!("File watcher bridge: successfully sent event to async channel");
+                    }
+                }
+                Err(e) => {
+                    error!("File watcher bridge: notify channel error: {:?}", e);
+                    break;
+                }
+            }
+        }
+    });
+    
+    // Debounce map: file_key -> (last_event_time, task_handle)
+    let mut debounce_map: HashMap<String, (Instant, tokio::task::JoinHandle<()>)> = HashMap::new();
+    let debounce_duration = Duration::from_millis(500); // 500ms debounce
+    
+    info!("File watcher: entering main event loop, waiting for events...");
+    loop {
+        info!("File watcher: waiting for next event from async channel...");
+        match async_rx.recv().await {
+            Some(res) => {
+                info!("File watcher: received event from async channel");
+        match res {
+            Ok(Event { kind, paths, .. }) => {
+                info!("File watcher: parsed event - kind={:?}, paths={:?}", kind, paths);
+                match kind {
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Any => {
+                        info!("File watcher: event kind matches, processing {} paths", paths.len());
+                        for path in paths {
+                            let path_str = path.to_string_lossy();
+                            info!("File watcher: checking path {}", path_str);
+                            
+                            // Check if it's a .drawio file
+                            if !path_str.ends_with(".drawio") {
+                                info!("File watcher: skipping non-.drawio file: {}", path_str);
+                                continue;
+                            }
+                            info!("File watcher: processing .drawio file: {}", path_str);
+                            
+                            // Check if file exists (might not exist yet for Create events)
+                            if !path.exists() {
+                                info!("File watcher: path {} does not exist yet, skipping", path_str);
+                                continue;
+                            }
+                            
+                            // Check if it's actually a file (not a directory)
+                            if !path.is_file() {
+                                info!("File watcher: path {} is not a file, skipping", path_str);
+                                continue;
+                            }
+                            
+                                                    // Get relative path from data_dir (use absolute path for comparison)
+                            let Ok(rel_path) = path.strip_prefix(&data_dir_abs) else {
+                                info!("File watcher: path {} is not under data_dir {}, skipping", path_str, data_dir_abs.display());
+                                continue;
+                            };
+                            // Normalize path separators (Windows uses \, Unix uses /)
+                            let mut file_key = rel_path.to_string_lossy().replace('\\', "/");
+                            // Remove leading slash if present
+                            file_key = file_key.trim_start_matches('/').to_string();
+                            info!("File watcher: detected change in file_key='{}', data_dir={}, rel_path={:?}", 
+                                  file_key, data_dir_abs.display(), rel_path);
+                            
+                            // Debug: list all current rooms (only log first few to avoid spam)
+                            let room_keys: Vec<String> = state.rooms.iter().map(|r| r.key().clone()).take(10).collect();
+                            if !room_keys.is_empty() {
+                                info!("File watcher: sample of current rooms (showing first 10): {:?}", room_keys);
+                            } else {
+                                info!("File watcher: no active rooms currently");
+                            }
+                            
+                            // Check if we're currently writing this file (ignore our own writes)
+                            if let Some(write_time) = state.writing_files.get(&file_key) {
+                                let elapsed = write_time.elapsed();
+                                if elapsed < Duration::from_secs(2) {
+                                    // We wrote this file recently, ignore
+                                    info!("File watcher: ignoring change to {} (we wrote it {}ms ago)", file_key, elapsed.as_millis());
+                                    continue;
+                                }
+                            }
+                            
+                            // Cancel previous debounce task for this file if it exists
+                            if let Some((_, handle)) = debounce_map.remove(&file_key) {
+                                info!("File watcher: canceling previous debounce for {}", file_key);
+                                handle.abort();
+                            }
+                            
+                            // Create new debounce task
+                            let state_clone = state.clone();
+                            let file_key_clone = file_key.clone();
+                            let path_clone = path.clone();
+                            let data_dir_clone = data_dir_abs.clone();
+                            info!("File watcher: scheduling reload of {} after {}ms", file_key_clone, debounce_duration.as_millis());
+                            let handle = tokio::spawn(async move {
+                                tokio::time::sleep(debounce_duration).await;
+                                info!("File watcher: debounce complete, reloading {}", file_key_clone);
+                                if let Err(e) = reload_file_from_disk(&state_clone, &file_key_clone, &path_clone).await {
+                                    error!("Failed to reload file {}: {e:?}", file_key_clone);
+                                }
+                            });
+                            
+                            debounce_map.insert(file_key.clone(), (Instant::now(), handle));
+                        }
+                    }
+                    _ => {
+                        info!("File watcher: ignoring event kind {:?}", kind);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("File watcher: error parsing event: {e:?}");
+            }
+        }
+            }
+            None => {
+                error!("File watcher: async channel closed (sender dropped)");
+                break;
+            }
+        }
+    }
+    error!("File watcher: main event loop exited");
+    Ok(())
+}
+
+async fn reload_file_from_disk(state: &AppState, file_key: &str, path: &Path) -> anyhow::Result<()> {
+    info!("reload_file_from_disk: reading file_key={}, path={}", file_key, path.display());
+    
+    // Read file from disk
+    let new_content = match fs::read_to_string(path).await {
+        Ok(c) => {
+            info!("reload_file_from_disk: read {} bytes from {}", c.len(), path.display());
+            c
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // File was deleted, remove room
+            info!("reload_file_from_disk: file {} was deleted, removing room", file_key);
+            state.rooms.remove(file_key);
+            return Ok(());
+        }
+        Err(e) => {
+            error!("reload_file_from_disk: read error for {}: {e}", path.display());
+            return Err(anyhow::anyhow!("read error: {e}"));
+        }
+    };
+    
+    // Get or create room - try exact match first
+    let room = if let Some(existing) = state.rooms.get(file_key) {
+        info!("reload_file_from_disk: room exists for {}", file_key);
+        existing.value().clone()
+    } else {
+        // Room doesn't exist yet - try to find by matching file paths
+        // Some editors might have opened the file with a different key format
+        info!("reload_file_from_disk: room not found for key '{}', searching by path", file_key);
+        let mut found_room = None;
+        let mut found_key = None;
+        for entry in state.rooms.iter() {
+            let room_key = entry.key();
+            // Check if this room's file path matches the changed file
+            let room_path = to_data_rel_path(&state.data_dir, room_key);
+            if room_path == path {
+                info!("reload_file_from_disk: found matching room with key '{}' for path {}", room_key, path.display());
+                found_room = Some(entry.value().clone());
+                found_key = Some(room_key.clone());
+                break;
+            }
+        }
+        
+        if let Some(room) = found_room {
+            // Update the room key mapping if it was different
+            if let Some(old_key) = found_key {
+                if old_key != file_key {
+                    info!("reload_file_from_disk: updating room key from '{}' to '{}'", old_key, file_key);
+                    state.rooms.remove(&old_key);
+                    state.rooms.insert(file_key.to_string(), room.clone());
+                }
+            }
+            room
+        } else {
+            // Room doesn't exist yet, create it
+            info!("reload_file_from_disk: creating new room for {}", file_key);
+            let (tx, _rx) = broadcast::channel::<ServerWsMessage>(64);
+            let room = Arc::new(Room {
+                tx,
+                content: RwLock::new(new_content.clone()),
+                version: AtomicU64::new(0),
+                members: DashMap::new(),
+            });
+            state.rooms.insert(file_key.to_string(), room.clone());
+            room
+        }
+    };
+    
+    // Check if content actually changed
+    let current_content = room.content.read().await.clone();
+    if current_content == new_content {
+        // No change, skip
+        info!("reload_file_from_disk: content unchanged for {}, skipping broadcast", file_key);
+        return Ok(());
+    }
+    
+    info!("reload_file_from_disk: content changed for {} (old: {} bytes, new: {} bytes)", 
+          file_key, current_content.len(), new_content.len());
+    
+    // Update room content
+    {
+        let mut guard = room.content.write().await;
+        *guard = new_content.clone();
+        room.version.fetch_add(1, Ordering::SeqCst);
+    }
+    
+    let version = room.version.load(Ordering::SeqCst);
+    info!("Reloaded file {} from disk (external change), version {}, broadcasting update", file_key, version);
+    
+    // Broadcast update to all connected clients
+    let update_msg = ServerWsMessage::Update {
+        version,
+        content: new_content,
+        username: "external".to_string(),
+        sender_id: "file_watcher".to_string(),
+    };
+    let send_result = room.tx.send(update_msg);
+    match send_result {
+        Ok(_) => info!("reload_file_from_disk: successfully broadcast update for {}", file_key),
+        Err(e) => error!("reload_file_from_disk: failed to broadcast update for {}: {e}", file_key),
+    }
+    
+    Ok(())
 }
 
