@@ -10,8 +10,11 @@ A collaborative draw.io server built with Rust and Axum.
 # Build the image
 docker build -t drawioserver .
 
-# Run the container
+# Run the container (with random token)
 docker run -p 3000:3000 -v $(pwd)/data:/app/data drawioserver
+
+# Run with a predefined token
+docker run -p 3000:3000 -v $(pwd)/data:/app/data -e DRAWIO_TOKEN=your-secret-token drawioserver
 ```
 
 Access the server at `http://localhost:3000`
