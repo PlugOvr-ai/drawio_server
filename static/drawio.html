@@ -54,6 +54,8 @@
       <span class="badge" id="version">v0</span>
     </div>
     <div class="row">
+      <input type="text" id="commit-message" placeholder="Commit message (optional)" style="padding: 6px 10px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 13px; width: 200px;" />
+      <button id="commit-btn">Commit</button>
       <a href="/" id="back">Back</a>
       <button id="ai-open">AI Modify</button>
     </div>
@@ -466,7 +468,7 @@
             selfUpdateToken++;
             ws.send(JSON.stringify({ type: 'replace', version: currentVersion, content: xml, self: selfUpdateToken }));
           }
-          // Persist via HTTP
+          // Persist via HTTP (no automatic commit)
           const resp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
             method: 'PUT',
             credentials: 'include',
@@ -502,6 +504,7 @@
                 selfUpdateToken++;
                 ws.send(JSON.stringify({ type: 'replace', version: currentVersion, content: xml, self: selfUpdateToken }));
               }
+              // Persist via HTTP (no automatic commit)
               const resp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
                 method: 'PUT',
                 credentials: 'include',
@@ -620,6 +623,93 @@
       const nx = x / Math.max(1, rect.width);
       const ny = y / Math.max(1, rect.height);
       ws.send(JSON.stringify({ type: 'cursor', x: nx, y: ny }));
+    });
+
+    // Commit button handler
+    $('commit-btn').addEventListener('click', async () => {
+      if (!filePath) {
+        $('status').textContent = 'No file to commit';
+        return;
+      }
+      
+      const commitMessage = $('commit-message').value.trim();
+      
+      try {
+        $('status').textContent = 'Saving and committing...';
+        $('commit-btn').disabled = true;
+        
+        // First, save the current content to ensure it's up to date
+        // Get current content from editor
+        let xml = lastXml;
+        if (!xml) {
+          // Request export if we don't have current content
+          const exportPromise = new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Export timeout')), 5000);
+            const handler = (evt) => {
+              try {
+                const data = JSON.parse(evt.data);
+                if (data.event === 'export') {
+                  clearTimeout(timeout);
+                  window.removeEventListener('message', handler);
+                  resolve(data.data || data.xml || '');
+                }
+              } catch {}
+            };
+            window.addEventListener('message', handler);
+            postToEditor({ action: 'export', format: 'xml' });
+          });
+          xml = await exportPromise;
+        }
+        
+        // Save the file first to update the room
+        const saveResp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: xml }),
+        });
+        
+        if (!saveResp.ok) {
+          const msg = await saveResp.text();
+          $('status').textContent = `Save failed: ${msg || saveResp.status}`;
+          return;
+        }
+        
+        // Now create the commit
+        const resp = await fetch(`/api/versions/checkpoint?path=${encodeURIComponent(filePath)}`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: commitMessage || undefined }),
+        });
+        
+        if (!resp.ok) {
+          const msg = await resp.text();
+          $('status').textContent = `Commit failed: ${msg || resp.status}`;
+          return;
+        }
+        
+        const result = await resp.json();
+        $('status').textContent = 'Committed';
+        $('commit-message').value = ''; // Clear message field
+        setTimeout(() => {
+          if ($('status').textContent === 'Committed') {
+            $('status').textContent = 'Connected';
+          }
+        }, 2000);
+      } catch (e) {
+        $('status').textContent = `Commit error: ${e.message}`;
+      } finally {
+        $('commit-btn').disabled = false;
+      }
+    });
+    
+    // Allow Enter key in commit message to trigger commit
+    $('commit-message').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        $('commit-btn').click();
+      }
     });
 
     refreshMe();

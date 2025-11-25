@@ -5,7 +5,7 @@ use sha2::{Sha256, Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::info;
@@ -31,6 +31,9 @@ pub struct GitVersionManager {
     data_dir: PathBuf,
     // Track state per file to decide when to commit
     file_states: Arc<RwLock<HashMap<String, FileCommitState>>>,
+    // Serialize Git operations to prevent index lock conflicts
+    // Using std::sync::Mutex because we need to hold it across spawn_blocking
+    git_mutex: Arc<StdMutex<()>>,
     // Configuration
     min_commit_interval: Duration,
     min_content_change_percent: f64,
@@ -71,6 +74,7 @@ impl GitVersionManager {
         Ok(Self {
             data_dir,
             file_states: Arc::new(RwLock::new(HashMap::new())),
+            git_mutex: Arc::new(StdMutex::new(())),
             min_commit_interval: Duration::from_secs(60), // 1 minute minimum
             min_content_change_percent: 5.0, // 5% content change minimum
         })
@@ -181,9 +185,12 @@ impl GitVersionManager {
         let username_str = username.to_string();
         let message_str = message.map(|s| s.to_string());
         let repo_path = self.data_dir.clone();
+        let git_lock = self.git_mutex.clone();
         
-        // Run Git operations in blocking thread
+        // Run Git operations in blocking thread with lock held
         let result = tokio::task::spawn_blocking(move || {
+            // Acquire lock to serialize Git operations (blocking mutex for blocking thread)
+            let _guard = git_lock.lock().unwrap();
             // Ensure file exists and has correct content
             if let Some(parent) = file_path_buf.parent() {
                 std::fs::create_dir_all(parent)
@@ -250,6 +257,7 @@ impl GitVersionManager {
             ).context("Failed to create commit")?;
             
             Ok::<String, anyhow::Error>(commit_oid.to_string()) as Result<String, anyhow::Error>
+            // Lock is released when _guard is dropped at end of closure
         }).await.context("Failed to spawn blocking task")??;
         
         let commit_oid_str = result;
@@ -404,8 +412,11 @@ impl GitVersionManager {
         let repo_path = self.data_dir.clone();
         let remote_name_str = remote_name.to_string();
         let branch_str = branch.to_string();
+        let git_lock = self.git_mutex.clone();
         
         tokio::task::spawn_blocking(move || {
+            // Acquire lock to serialize Git operations
+            let _guard = git_lock.lock().unwrap();
             let repo = Repository::open(&repo_path)
                 .context("Failed to open repository")?;
             let mut remote = repo.find_remote(&remote_name_str)
@@ -429,8 +440,11 @@ impl GitVersionManager {
         let repo_path = self.data_dir.clone();
         let remote_name_str = remote_name.to_string();
         let url_str = url.to_string();
+        let git_lock = self.git_mutex.clone();
         
         tokio::task::spawn_blocking(move || {
+            // Acquire lock to serialize Git operations
+            let _guard = git_lock.lock().unwrap();
             let repo = Repository::open(&repo_path)
                 .context("Failed to open repository")?;
             

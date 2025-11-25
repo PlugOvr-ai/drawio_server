@@ -35,8 +35,11 @@ use tracing::{error, info, Level};
 use uuid::Uuid;
 use clap::Parser;
 use reqwest::Client;
+#[cfg(feature = "file-watcher")]
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Event, EventKind, Config};
+#[cfg(feature = "file-watcher")]
 use std::collections::HashMap;
+#[cfg(feature = "file-watcher")]
 use std::time::{Duration, Instant};
 use anyhow::Context;
 
@@ -47,6 +50,7 @@ struct AppState {
     data_dir: Arc<PathBuf>,
     auth_token: String,
     require_token: bool,
+    #[cfg(feature = "file-watcher")]
     writing_files: Arc<DashMap<String, Instant>>, // file_key -> timestamp when we started writing
     git_manager: Arc<git_versioning::GitVersionManager>,
 }
@@ -193,17 +197,21 @@ async fn main() -> anyhow::Result<()> {
         data_dir: Arc::new(data_dir.clone()),
         auth_token,
         require_token,
+        #[cfg(feature = "file-watcher")]
         writing_files: Arc::new(DashMap::new()),
         git_manager,
     };
     
     // Start file watcher task
-    let watcher_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = watch_files(watcher_state, data_dir).await {
-            error!("file watcher error: {e:?}");
-        }
-    });
+    #[cfg(feature = "file-watcher")]
+    {
+        let watcher_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = watch_files(watcher_state, data_dir).await {
+                error!("file watcher error: {e:?}");
+            }
+        });
+    }
 
     let app = Router::new()
         .route("/", get(root_page))
@@ -595,18 +603,21 @@ async fn put_file(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
             
-            // Create Git version (non-blocking, only on significant changes)
-            let git_mgr = state.git_manager.clone();
-            let file_key_clone = file_key.clone();
-            let content_clone = req.content.clone();
-            let username = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar)
-                .unwrap_or_else(|| "unknown".to_string());
-            let version = room.version.load(Ordering::SeqCst);
-            tokio::task::spawn(async move {
-                if let Err(e) = git_mgr.create_version(&file_key_clone, &content_clone, &username, version, None, false).await {
-                    error!("Failed to create Git version for {}: {e:?}", file_key_clone);
-                }
-            });
+            // Create Git commit only if commit=true query parameter is present
+            if q.get("commit").map(|s| s == "true").unwrap_or(false) {
+                let git_mgr = state.git_manager.clone();
+                let file_key_clone = file_key.clone();
+                let content_clone = req.content.clone();
+                let username = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let version = room.version.load(Ordering::SeqCst);
+                let message = q.get("message").map(|s| s.clone());
+                tokio::task::spawn(async move {
+                    if let Err(e) = git_mgr.create_version(&file_key_clone, &content_clone, &username, version, message.as_deref(), true).await {
+                        error!("Failed to create Git version for {}: {e:?}", file_key_clone);
+                    }
+                });
+            }
             
             StatusCode::NO_CONTENT.into_response()
         }
@@ -854,16 +865,8 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, username: String, fil
                                     error!("ws write file error: {err:?}");
                                 }
                                 
-                                // Create Git version (non-blocking, only on significant changes)
-                                let git_mgr = state.git_manager.clone();
-                                let file_key_clone = file_key.clone();
-                                let content_clone = content.clone();
-                                let username_clone = username.clone();
-                                tokio::task::spawn(async move {
-                                    if let Err(e) = git_mgr.create_version(&file_key_clone, &content_clone, &username_clone, new_version, None, false).await {
-                                        error!("Failed to create Git version for {}: {e:?}", file_key_clone);
-                                    }
-                                });
+                                // Note: Git commits are not created automatically from WebSocket updates.
+                                // Use the /api/versions/checkpoint endpoint or save with ?commit=true to create commits.
                                 
                                 let _ = room.tx.send(ServerWsMessage::Update {
                                     version: new_version,
@@ -1089,17 +1092,20 @@ async fn api_put_file(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     
-    // Create Git version (non-blocking, only on significant changes)
-    let git_mgr = state.git_manager.clone();
-    let safe_clone = safe.clone();
-    let content_clone = req.content.clone();
-    let username = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar)
-        .unwrap_or_else(|| "unknown".to_string());
-    tokio::task::spawn(async move {
-        if let Err(e) = git_mgr.create_version(&safe_clone, &content_clone, &username, version, None, false).await {
-            error!("Failed to create Git version for {}: {e:?}", safe_clone);
-        }
-    });
+    // Create Git commit only if commit=true query parameter is present
+    if q.get("commit").map(|s| s == "true").unwrap_or(false) {
+        let git_mgr = state.git_manager.clone();
+        let safe_clone = safe.clone();
+        let content_clone = req.content.clone();
+        let username = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar)
+            .unwrap_or_else(|| "unknown".to_string());
+        let message = q.get("message").map(|s| s.clone());
+        tokio::task::spawn(async move {
+            if let Err(e) = git_mgr.create_version(&safe_clone, &content_clone, &username, version, message.as_deref(), true).await {
+                error!("Failed to create Git version for {}: {e:?}", safe_clone);
+            }
+        });
+    }
     
     StatusCode::NO_CONTENT.into_response()
 }
@@ -1830,18 +1836,26 @@ async fn api_ai_modify(
 // ----- File Watcher Helpers -----
 
 fn mark_file_writing(state: &AppState, file_key: &str) {
-    state.writing_files.insert(file_key.to_string(), Instant::now());
-    // Clean up old entries (older than 5 seconds) in background
-    let state_clone = state.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let cutoff = Instant::now() - Duration::from_secs(5);
-        state_clone.writing_files.retain(|_, &mut time| time > cutoff);
-    });
+    #[cfg(feature = "file-watcher")]
+    {
+        state.writing_files.insert(file_key.to_string(), Instant::now());
+        // Clean up old entries (older than 5 seconds) in background
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let cutoff = Instant::now() - Duration::from_secs(5);
+            state_clone.writing_files.retain(|_, &mut time| time > cutoff);
+        });
+    }
+    #[cfg(not(feature = "file-watcher"))]
+    {
+        let _ = (state, file_key); // Suppress unused variable warnings
+    }
 }
 
 // ----- File Watcher -----
 
+#[cfg(feature = "file-watcher")]
 async fn watch_files(state: AppState, data_dir: PathBuf) -> anyhow::Result<()> {
     use std::sync::mpsc;
     use tokio::sync::mpsc as tokio_mpsc;
@@ -1969,7 +1983,6 @@ async fn watch_files(state: AppState, data_dir: PathBuf) -> anyhow::Result<()> {
                             let state_clone = state.clone();
                             let file_key_clone = file_key.clone();
                             let path_clone = path.clone();
-                            let data_dir_clone = data_dir_abs.clone();
                             info!("File watcher: scheduling reload of {} after {}ms", file_key_clone, debounce_duration.as_millis());
                             let handle = tokio::spawn(async move {
                                 tokio::time::sleep(debounce_duration).await;
@@ -2002,6 +2015,7 @@ async fn watch_files(state: AppState, data_dir: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "file-watcher")]
 async fn reload_file_from_disk(state: &AppState, file_key: &str, path: &Path) -> anyhow::Result<()> {
     info!("reload_file_from_disk: reading file_key={}, path={}", file_key, path.display());
     
