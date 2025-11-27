@@ -12,7 +12,7 @@ use std::{
 use axum::{
     extract::{
         ws::{Message as WsRawMessage, WebSocket, WebSocketUpgrade},
-        Path as AxumPath, Query, State, Multipart,
+        Path as AxumPath, Query, State, Multipart, DefaultBodyLimit,
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response, Redirect},
@@ -242,6 +242,7 @@ async fn main() -> anyhow::Result<()> {
                 (StatusCode::INTERNAL_SERVER_ERROR, "static file error")
             }),
         )
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for file uploads
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::very_permissive(), // simplify testing; tighten for production
