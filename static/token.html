@@ -35,6 +35,8 @@
             body: JSON.stringify({ username: name }),
           }).catch(() => {});
         }
+        // Store token in localStorage for re-authentication
+        localStorage.setItem('drawio_token', token);
         // If not redirected, go home
         location.href = '/';
       } catch {

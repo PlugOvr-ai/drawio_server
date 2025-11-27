@@ -149,6 +149,15 @@
       try {
         const me = await fetchJSON('/me');
         greeting.textContent = 'Hello, ' + me.username;
+        // Store token from URL if present (for persistence across sessions)
+        const urlToken = new URLSearchParams(location.search).get('token');
+        if (urlToken) {
+          localStorage.setItem('drawio_token', urlToken);
+          // Clean URL to remove token from address bar
+          const url = new URL(location);
+          url.searchParams.delete('token');
+          history.replaceState({}, '', url);
+        }
       } catch {
         greeting.textContent = 'Hello, guest';
       }
@@ -275,7 +284,11 @@
       const username = settingsName.value.trim();
       if (!username) return alert('enter a display name');
       try {
-        const res = await fetch('/me?token=' + (new URLSearchParams(location.search).get('token') || ''), {
+        // Use token from localStorage or URL query params as fallback
+        const storedToken = localStorage.getItem('drawio_token');
+        const urlToken = new URLSearchParams(location.search).get('token');
+        const token = storedToken || urlToken || '';
+        const res = await fetch('/me?token=' + encodeURIComponent(token), {
           method: 'PUT',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },

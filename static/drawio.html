@@ -147,25 +147,77 @@
 
     async function loadInitial() {
       if (!filePath) return;
-      const resp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, { credentials: 'include' });
-      if (!resp.ok) throw new Error(await resp.text());
+      // Include token from localStorage as fallback
+      let url = `/api/file?path=${encodeURIComponent(filePath)}`;
+      const storedToken = localStorage.getItem('drawio_token');
+      if (storedToken) {
+        url += `&token=${encodeURIComponent(storedToken)}`;
+      }
+      const resp = await fetch(url, { credentials: 'include' });
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          // Unauthorized - redirect to login
+          $('status').textContent = 'Authentication required';
+          setTimeout(() => {
+            location.href = '/token.html';
+          }, 1500);
+          return;
+        }
+        throw new Error(await resp.text());
+      }
       const meta = await resp.json();
       currentVersion = meta.version || 0;
       $('version').textContent = 'v' + currentVersion;
       lastXml = meta.content || '';
       // If editor already ready, push content
       if (isEditorReady) {
-        postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: fileName });
+        postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
       }
     }
 
     function connectWS() {
       if (!filePath) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws/_?path=${encodeURIComponent(filePath)}`);
+      // Include token from localStorage if available for re-authentication
+      let wsUrl = `${proto}://${location.host}/ws/_?path=${encodeURIComponent(filePath)}`;
+      const storedToken = localStorage.getItem('drawio_token');
+      if (storedToken) {
+        wsUrl += `&token=${encodeURIComponent(storedToken)}`;
+      }
+      ws = new WebSocket(wsUrl);
       ws.onopen = () => { $('status').textContent = 'Connected'; };
-      ws.onclose = () => { $('status').textContent = 'Disconnected'; };
-      ws.onerror = () => { $('status').textContent = 'Error'; };
+      ws.onclose = (evt) => { 
+        $('status').textContent = 'Disconnected';
+        // If connection closed with 1008 (policy violation, usually auth failure), redirect to login
+        if (evt.code === 1008 || evt.code === 1002 || evt.code === 1003) {
+          $('status').textContent = 'Authentication expired';
+          setTimeout(() => {
+            location.href = '/token.html';
+          }, 1500);
+        }
+      };
+      ws.onerror = (evt) => { 
+        $('status').textContent = 'Connection error';
+        // WebSocket connection failed - likely authentication issue
+        // Wait a moment to see if we get more info, then check if it's auth
+        setTimeout(async () => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            // Try a simple API call to check authentication
+            try {
+              const testResp = await fetch('/me', { credentials: 'include' });
+              if (testResp.status === 401) {
+                $('status').textContent = 'Authentication required';
+                setTimeout(() => {
+                  location.href = '/token.html';
+                }, 1000);
+              }
+            } catch (e) {
+              // Network error or other issue
+              console.error('Error checking auth:', e);
+            }
+          }
+        }, 500);
+      };
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
