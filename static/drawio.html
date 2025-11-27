@@ -118,7 +118,20 @@
     const params = new URLSearchParams(location.search);
     const filePath = params.get('path') || params.get('name');
     $('file').textContent = filePath || '(no file)';
-    $('back').href = '/';
+    
+    // Store token from URL if present
+    const urlToken = params.get('token');
+    if (urlToken) {
+      localStorage.setItem('drawio_token', urlToken);
+      // Clean URL to remove token from address bar for security
+      const url = new URL(location);
+      url.searchParams.delete('token');
+      history.replaceState({}, '', url);
+    }
+    
+    // Set back button with token
+    const storedToken = localStorage.getItem('drawio_token');
+    $('back').href = storedToken ? `/?token=${encodeURIComponent(storedToken)}` : '/';
 
     let ws = null;
     let currentVersion = 0;
@@ -130,10 +143,18 @@
     const cursors = new Map(); // username -> {el, color, selEl}
     let lastEmbedMoveAt = 0;
     const aiJobs = new Map(); // job_id -> {lastPhase, createdAt}
+    
+    // Helper function to add token to URLs
+    function addTokenToUrl(url) {
+      const storedToken = localStorage.getItem('drawio_token');
+      if (!storedToken) return url;
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}token=${encodeURIComponent(storedToken)}`;
+    }
 
     async function refreshMe() {
       try {
-        const res = await fetch('/me', { credentials: 'include' });
+        const res = await fetch(addTokenToUrl('/me'), { credentials: 'include' });
         if (res.ok) {
           const me = await res.json();
           $('user').textContent = me.username;
@@ -141,18 +162,20 @@
         } else {
           $('user').textContent = 'guest';
           myUsername = 'guest';
+          // If unauthorized, redirect to login
+          if (res.status === 401) {
+            $('status').textContent = 'Authentication required';
+            setTimeout(() => {
+              location.href = '/token.html';
+            }, 1500);
+          }
         }
       } catch {}
     }
 
     async function loadInitial() {
       if (!filePath) return;
-      // Include token from localStorage as fallback
-      let url = `/api/file?path=${encodeURIComponent(filePath)}`;
-      const storedToken = localStorage.getItem('drawio_token');
-      if (storedToken) {
-        url += `&token=${encodeURIComponent(storedToken)}`;
-      }
+      const url = addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`);
       const resp = await fetch(url, { credentials: 'include' });
       if (!resp.ok) {
         if (resp.status === 401) {
@@ -395,7 +418,7 @@
       showAiActivity();
       addAiActivity('local', 'request', `Sending to ${provider} (${model})`);
       try {
-        const res = await fetch(`/api/ai_modify?path=${encodeURIComponent(filePath)}`, {
+        const res = await fetch(addTokenToUrl(`/api/ai_modify?path=${encodeURIComponent(filePath)}`), {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -522,7 +545,7 @@
             ws.send(JSON.stringify({ type: 'replace', version: currentVersion, content: xml, self: selfUpdateToken }));
           }
           // Persist via HTTP (no automatic commit)
-          const resp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
+          const resp = await fetch(addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`), {
             method: 'PUT',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
@@ -558,7 +581,7 @@
                 ws.send(JSON.stringify({ type: 'replace', version: currentVersion, content: xml, self: selfUpdateToken }));
               }
               // Persist via HTTP (no automatic commit)
-              const resp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
+              const resp = await fetch(addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`), {
                 method: 'PUT',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -580,7 +603,8 @@
       }
       // Exit from editor
       if (data.event === 'exit' || data.action === 'exit') {
-        location.href = '/';
+        const storedToken = localStorage.getItem('drawio_token');
+        location.href = storedToken ? `/?token=${encodeURIComponent(storedToken)}` : '/';
         return;
       }
     });
@@ -715,7 +739,7 @@
         }
         
         // Save the file first to update the room
-        const saveResp = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, {
+        const saveResp = await fetch(addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`), {
           method: 'PUT',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -729,7 +753,7 @@
         }
         
         // Now create the commit
-        const resp = await fetch(`/api/versions/checkpoint?path=${encodeURIComponent(filePath)}`, {
+        const resp = await fetch(addTokenToUrl(`/api/versions/checkpoint?path=${encodeURIComponent(filePath)}`), {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },

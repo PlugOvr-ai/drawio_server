@@ -133,14 +133,22 @@
     const fileBody = $('file-tbody');
 
     let cwd = '';
+    
+    // Helper function to add token to URLs
+    function addTokenToUrl(url) {
+      const storedToken = localStorage.getItem('drawio_token');
+      if (!storedToken) return url;
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}token=${encodeURIComponent(storedToken)}`;
+    }
 
     async function fetchJSON(url, opts = {}) {
-      const res = await fetch(url, { credentials: 'include', ...opts });
+      const res = await fetch(addTokenToUrl(url), { credentials: 'include', ...opts });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     }
     async function fetchText(url, opts = {}) {
-      const res = await fetch(url, { credentials: 'include', ...opts });
+      const res = await fetch(addTokenToUrl(url), { credentials: 'include', ...opts });
       if (!res.ok) throw new Error(await res.text());
       return res.text();
     }
@@ -192,7 +200,9 @@
               cwd = f.path;
               refreshFiles();
             } else {
-              window.location.href = `/drawio.html?path=${encodeURIComponent(f.path)}`;
+              const token = localStorage.getItem('drawio_token') || '';
+              const url = `/drawio.html?path=${encodeURIComponent(f.path)}${token ? '&token=' + encodeURIComponent(token) : ''}`;
+              window.location.href = url;
             }
           };
           tdSize.textContent = f.is_dir ? '–' : formatSize(f.size || 0);
@@ -202,7 +212,8 @@
           const btnOpen = document.createElement('a');
           btnOpen.className = 'button';
           btnOpen.textContent = 'Open';
-          btnOpen.href = f.is_dir ? '#' : `/drawio.html?path=${encodeURIComponent(f.path)}`;
+          const token = localStorage.getItem('drawio_token') || '';
+          btnOpen.href = f.is_dir ? '#' : `/drawio.html?path=${encodeURIComponent(f.path)}${token ? '&token=' + encodeURIComponent(token) : ''}`;
           btnOpen.onclick = (ev) => { if (f.is_dir) { ev.preventDefault(); cwd = f.path; refreshFiles(); } };
           const btnDownload = document.createElement('a');
           btnDownload.className = 'button';
@@ -216,7 +227,7 @@
             if (!newName || newName === f.name) return;
             if (!f.is_dir && !newName.endsWith('.drawio')) return alert('Name must end with .drawio');
             try {
-              const res = await fetch(`/api/rename`, {
+              const res = await fetch(addTokenToUrl('/api/rename'), {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -235,7 +246,7 @@
                 alert('Folder deletion not implemented yet');
                 return;
               }
-              const res = await fetch(`/api/file?path=${encodeURIComponent(f.path)}`, {
+              const res = await fetch(addTokenToUrl(`/api/file?path=${encodeURIComponent(f.path)}`), {
                 method: 'DELETE',
                 credentials: 'include',
               });
@@ -300,8 +311,11 @@
       } catch (e) { alert(e.message); }
     };
     $('logout')?.addEventListener('click', async () => {
-      await fetch('/logout', { method: 'POST', credentials: 'include' });
-      await refreshMe();
+      await fetch(addTokenToUrl('/logout'), { method: 'POST', credentials: 'include' });
+      // Clear stored token on logout
+      localStorage.removeItem('drawio_token');
+      // Redirect to login page
+      location.href = '/token.html';
     });
     $('refresh').onclick = refreshFiles;
     $('nav-root').onclick = (e) => { e.preventDefault(); cwd = ''; refreshFiles(); };
@@ -333,7 +347,7 @@
       }
       
       try {
-        const res = await fetch(url, {
+        const res = await fetch(addTokenToUrl(url), {
           method: 'POST',
           credentials: 'include',
           body: formData,
@@ -372,7 +386,7 @@
       const name = prompt('Folder name:');
       if (!name) return;
       const full = cwd ? (cwd + '/' + name) : name;
-      const res = await fetch('/api/mkdir', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: full }) });
+      const res = await fetch(addTokenToUrl('/api/mkdir'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: full }) });
       if (!res.ok) return alert(await res.text());
       refreshFiles();
     };
@@ -381,7 +395,7 @@
       if (!name || !name.endsWith('.drawio')) return;
       const full = cwd ? (cwd + '/' + name) : name;
       const content = getTemplateXml('blank');
-      const res = await fetch(`/api/file?path=${encodeURIComponent(full)}`, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+      const res = await fetch(addTokenToUrl(`/api/file?path=${encodeURIComponent(full)}`), { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
       if (!res.ok) return alert(await res.text());
       refreshFiles();
     };
