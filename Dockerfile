@@ -36,9 +36,11 @@ RUN mkdir -p static/diagrams && \
     curl -L -o /tmp/draw.war https://github.com/jgraph/drawio/releases/download/v24.0.0/draw.war && \
     unzip -q /tmp/draw.war -d static/diagrams && \
     rm /tmp/draw.war
+COPY PostConfig.js static/diagrams/js
 
 # Copy static HTML files
 COPY static/drawio.html static/index.html static/token.html static/
+
 
 # Copy the binary from builder
 COPY --from=builder /app/target/release/drawioserver /app/drawioserver

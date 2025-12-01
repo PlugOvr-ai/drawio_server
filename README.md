@@ -26,6 +26,7 @@ Access the server at `http://localhost:3000`
 mkdir -p static/diagrams
 curl -L -o /tmp/draw.war https://github.com/jgraph/drawio/releases/download/v24.0.0/draw.war
 unzip -q /tmp/draw.war -d static/diagrams
+cp PostConfig.js static/diagrams/js
 rm /tmp/draw.war
 
 # Build
