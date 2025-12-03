@@ -283,13 +283,13 @@
             if (msg.content && msg.content !== lastXml) {
               const isAiUpdate = msg.username === 'ai';
               const isExternalUpdate = msg.username === 'external';
-              console.log(`[WS] Update from ${msg.username}, isAI: ${isAiUpdate}, isExternal: ${isExternalUpdate}, content length: ${msg.content.length}, prev length: ${lastXml.length}`);
+              //console.log(`[WS] Update from ${msg.username}, isAI: ${isAiUpdate}, isExternal: ${isExternalUpdate}, content length: ${msg.content.length}, prev length: ${lastXml.length}`);
               lastXml = msg.content;
               // For AI updates and external updates, always reload (not merge) since content is completely regenerated
               // For human updates, try merge first, then fallback to reload
               if (isAiUpdate) {
                 // Always reload for AI updates
-                console.log('[WS] Reloading editor with AI-generated XML');
+                //console.log('[WS] Reloading editor with AI-generated XML');
                 $('status').textContent = 'AI update received, reloading...';
                 postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
                 // Show visual feedback
@@ -299,7 +299,7 @@
                 }, 500);
               } else if (isExternalUpdate) {
                 // Always reload for external file changes
-                console.log('[WS] Reloading editor with externally modified file');
+                //console.log('[WS] Reloading editor with externally modified file');
                 $('status').textContent = 'File changed externally, reloading...';
                 postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
                 // Show visual feedback
@@ -316,13 +316,13 @@
                 }
               }
             } else {
-              console.log(`[WS] Update ignored: content same or empty (same: ${msg.content === lastXml})`);
+              // console.log(`[WS] Update ignored: content same or empty (same: ${msg.content === lastXml})`);
             }
           } else if (msg.type === 'ai_status') {
             addAiActivity(msg.job_id, msg.phase, msg.detail);
           }
         } catch (e) {
-          console.error('bad ws message', e, ev.data);
+          //console.error('bad ws message', e, ev.data);
         }
       };
     }
@@ -498,7 +498,7 @@
             const absoluteX = e.clientX - bgPageRect.left;
             const absoluteY = e.clientY - bgPageRect.top;
             // Send absolute coordinates directly (no normalization)
-            console.log('SEND TO WS: cursor', absoluteX, absoluteY);
+            //console.log('SEND TO WS: cursor', absoluteX, absoluteY);
             ws.send(JSON.stringify({ type: 'cursor', x: absoluteX, y: absoluteY }));
           } 
         }, { passive: true });
@@ -523,7 +523,7 @@
       // Background page position update from iframe - check this early
       if (data.event === 'backgroundPagePosition') {
         backgroundPagePosition = data;
-        console.log('Background page position updated:', backgroundPagePosition);
+        //console.log('Background page position updated:', backgroundPagePosition);
         
         // Verify the position by getting it directly from iframe (for debugging)
         try {
@@ -533,18 +533,18 @@
           if (bgPage) {
             const directRect = bgPage.getBoundingClientRect();
             const iframeRect = iframe.getBoundingClientRect();
-            console.log('Direct verification:', {
-              fromMessage: { clientLeft: data.clientLeft, clientTop: data.clientTop },
-              directFromIframe: { left: directRect.left, top: directRect.top },
-              iframeRect: { left: iframeRect.left, top: iframeRect.top },
-              diff: {
-                left: directRect.left - data.clientLeft,
-                top: directRect.top - data.clientTop
-              }
-            });
+            //console.log('Direct verification:', {
+             // fromMessage: { clientLeft: data.clientLeft, clientTop: data.clientTop },
+             // directFromIframe: { left: directRect.left, top: directRect.top },
+             // iframeRect: { left: iframeRect.left, top: iframeRect.top },
+             // diff: {
+             //   left: directRect.left - data.clientLeft,
+             //   top: directRect.top - data.clientTop
+             // }
+            //});
           }
         } catch (e) {
-          console.log('Could not verify backgroundPage position:', e);
+         // console.log('Could not verify backgroundPage position:', e);
         }
         return;
       }
@@ -591,7 +591,7 @@
       }
       // Debug: log all messages to see what we're receiving
       if (data.event === 'backgroundPagePosition' || data.event === 'mouseMove') {
-        console.log('Received message:', data.event, data);
+        //console.log('Received message:', data.event, data);
       }
       // The editor asks us to save current XML
       if (data.event === 'save' || data.action === 'save' || data.event === 'autosave') {
@@ -759,22 +759,22 @@
           // So we add: parent viewport position of iframe + iframe viewport position of bgPage + absolute coord
           x =  bgPageClientLeft + nx;
           y =  bgPageClientTop + ny;
-          console.log('moveCursor debug:', {
-            username,
-            absoluteCoord: { nx, ny },
-            iframeRect: { left: iframeRect.left, top: iframeRect.top },
-            bgPagePos: { left: bgPageClientLeft, top: bgPageClientTop },
-            final: { x, y }
-          });
+         // console.log('moveCursor debug:', {
+          //  username,
+          //  absoluteCoord: { nx, ny },
+          //  iframeRect: { left: iframeRect.left, top: iframeRect.top },
+          //  bgPagePos: { left: bgPageClientLeft, top: bgPageClientTop },
+          //  final: { x, y }
+          //});
           // Debug logging (occasionally to avoid spam)
           if (Math.random() < 0.01) {
-            console.log('moveCursor debug:', {
-              username,
-              absoluteCoord: { nx, ny },
-              iframeRect: { left: iframeRect.left, top: iframeRect.top },
-              bgPagePos: { left: bgPageClientLeft, top: bgPageClientTop },
-              final: { x, y }
-            });
+           // console.log('moveCursor debug:', {
+             // username,
+            //  absoluteCoord: { nx, ny },
+            //  iframeRect: { left: iframeRect.left, top: iframeRect.top },
+            //  bgPagePos: { left: bgPageClientLeft, top: bgPageClientTop },
+            //  final: { x, y }
+            //});
           }
         } else {
           // Fallback: treat as normalized coordinates if backgroundPagePosition not available
@@ -812,7 +812,7 @@
           // Calculate absolute coordinates relative to geBackgroundPage origin
           const absoluteX = (e.clientX - iframeRect.left) - bgPageRect.left;
           const absoluteY = (e.clientY - iframeRect.top) - bgPageRect.top;
-          console.log('SEND TO WS: cursor', absoluteX, absoluteY);
+          //console.log('SEND TO WS: cursor', absoluteX, absoluteY);
           ws.send(JSON.stringify({ type: 'cursor', x: absoluteX, y: absoluteY }));
         } else {
           // Fallback: send normalized coordinates if geBackgroundPage not available
