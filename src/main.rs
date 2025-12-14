@@ -2641,7 +2641,12 @@ async fn scheduled_push_task(state: AppState) {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     
-    let last_push_time = Arc::new(AtomicU64::new(0));
+    // Initialize to current time so the first push respects the configured interval
+    let initial_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let last_push_time = Arc::new(AtomicU64::new(initial_time));
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60)); // Check every minute
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     
