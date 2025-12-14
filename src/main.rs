@@ -976,6 +976,10 @@ async fn api_list(
     };
     while let Ok(Some(ent)) = rd.next_entry().await {
         let name = ent.file_name().to_string_lossy().to_string();
+        // Skip hidden files and folders (starting with .)
+        if name.starts_with('.') {
+            continue;
+        }
         let meta = match ent.metadata().await {
             Ok(m) => m,
             Err(_) => continue,
