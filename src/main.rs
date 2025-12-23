@@ -350,14 +350,14 @@ fn get_authorized_user_from_header_or_query(
         let prefix = "token ";
         if let Some(rest) = auth.strip_prefix(prefix) {
             if rest.trim() == state.auth_token {
-                return Some("token".to_string());
+                return Some("John Doe".to_string());
             }
         }
     }
     // Query param ?token=...
     if let Some(t) = query.get("token") {
         if t == &state.auth_token {
-            return Some("token".to_string());
+            return Some("John Doe".to_string());
         }
     }
     None
@@ -425,12 +425,25 @@ async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespo
     (jar, StatusCode::NO_CONTENT).into_response()
 }
 
-async fn me(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+async fn me(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    // First, try existing session cookie
     if let Some(username) = get_session_user(&state, &jar) {
-        Json(LoginResponse { username }).into_response()
-    } else {
-        StatusCode::UNAUTHORIZED.into_response()
+        return Json(LoginResponse { username }).into_response();
     }
+
+    // Next, accept authentication via token header or ?token= query, like other APIs
+    if let Some(username) = get_authorized_user_from_header_or_query(&state, &headers, &q, &jar) {
+        // Optionally create a session so subsequent /me calls don't need the token again
+        let jar = set_session_user(&state, jar, &username);
+        return (jar, Json(LoginResponse { username })).into_response();
+    }
+
+    StatusCode::UNAUTHORIZED.into_response()
 }
 
 async fn put_me(
@@ -468,7 +481,7 @@ async fn token_login(
 ) -> impl IntoResponse {
     if let Some(token) = params.get("token") {
         if token == &state.auth_token {
-            let jar = set_session_user(&state, jar, "token");
+            let jar = set_session_user(&state, jar, "John Doe");
             return (jar, Redirect::to("/")).into_response();
         }
     }
