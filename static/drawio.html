@@ -429,24 +429,25 @@
             addAiActivity(msg.job_id, msg.phase, msg.detail);
           } else if (msg.type === 'conflict') {
             // Version conflict: our save was rejected because we had a stale version
-            // The server sent us the current content - we must reload to sync
-            console.warn(`Version conflict: had v${msg.client_version}, server has v${msg.server_version}`);
             pendingSaveVersion = null; // Clear pending save - it was rejected
-            isLoadingContent = true; // Prevent saves while loading server content
-            currentVersion = msg.server_version;
+            const clientVer = msg.client_version;
+            const serverVer = msg.server_version;
+            currentVersion = serverVer;
             $('version').textContent = 'v' + currentVersion;
-            lastXml = msg.content || '';
-            $('status').textContent = 'Syncing...';
-            // Reload the editor with the server's current content
-            if (isEditorReady) {
-              postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
-              postToEditor({ action: 'status', modified: false }); // Clear modified flag after reload
-            }
-            // Show visual feedback
-            setTimeout(() => {
-              isLoadingContent = false;
+            lastXml = msg.content || lastXml;
+            // Only reload if we're behind by more than 1 (e.g. v3 vs v5). Off by 1 is likely our previous save.
+            if (serverVer > clientVer + 1) {
+              console.warn(`Version conflict: had v${clientVer}, server has v${serverVer} - reloading`);
+              isLoadingContent = true;
+              $('status').textContent = 'Syncing...';
+              if (isEditorReady) {
+                postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+                postToEditor({ action: 'status', modified: false });
+              }
+              setTimeout(() => { isLoadingContent = false; $('status').textContent = 'Connected'; }, 1500);
+            } else {
               $('status').textContent = 'Connected';
-            }, 1500);
+            }
           }
         } catch (e) {
           //console.error('bad ws message', e, ev.data);
@@ -756,17 +757,24 @@
           if (resp.ok || resp.status === 200) {
             const result = await resp.json().catch(() => null);
             if (result && result.error === 'version_conflict') {
-              // Version conflict - reload with server content
-              console.warn(`HTTP PUT version conflict: had v${result.client_version}, server has v${result.server_version}`);
-              currentVersion = result.server_version;
+              const cv = result.client_version;
+              const sv = result.server_version;
+              currentVersion = sv;
               $('version').textContent = 'v' + currentVersion;
-              lastXml = result.content || '';
-              $('status').textContent = 'Syncing...';
-              if (isEditorReady) {
-                postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+              lastXml = result.content || lastXml;
+              // Only reload if behind by more than 1
+              if (sv > cv + 1) {
+                console.warn(`HTTP PUT version conflict: had v${cv}, server has v${sv} - reloading`);
+                $('status').textContent = 'Syncing...';
+                if (isEditorReady) {
+                  postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+                  postToEditor({ action: 'status', modified: false });
+                }
+                setTimeout(() => { $('status').textContent = 'Connected'; }, 1500);
+              } else {
+                $('status').textContent = 'Saved';
                 postToEditor({ action: 'status', modified: false });
               }
-              setTimeout(() => { $('status').textContent = 'Connected'; }, 1500);
               return;
             }
             // Success - increment version (we'll also get WS broadcast but that's fine)
@@ -817,17 +825,23 @@
               if (resp.ok || resp.status === 200) {
                 const result = await resp.json().catch(() => null);
                 if (result && result.error === 'version_conflict') {
-                  // Version conflict - reload with server content
-                  console.warn(`HTTP PUT version conflict: had v${result.client_version}, server has v${result.server_version}`);
-                  currentVersion = result.server_version;
+                  const cv = result.client_version;
+                  const sv = result.server_version;
+                  currentVersion = sv;
                   $('version').textContent = 'v' + currentVersion;
-                  lastXml = result.content || '';
-                  $('status').textContent = 'Syncing...';
-                  if (isEditorReady) {
-                    postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+                  lastXml = result.content || lastXml;
+                  if (sv > cv + 1) {
+                    console.warn(`HTTP PUT version conflict: had v${cv}, server has v${sv} - reloading`);
+                    $('status').textContent = 'Syncing...';
+                    if (isEditorReady) {
+                      postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+                      postToEditor({ action: 'status', modified: false });
+                    }
+                    setTimeout(() => { $('status').textContent = 'Connected'; }, 1500);
+                  } else {
+                    $('status').textContent = 'Saved';
                     postToEditor({ action: 'status', modified: false });
                   }
-                  setTimeout(() => { $('status').textContent = 'Connected'; }, 1500);
                   return;
                 }
                 // Success - increment version
@@ -1057,14 +1071,20 @@
         if (saveResp.ok || saveResp.status === 200) {
           const saveResult = await saveResp.json().catch(() => null);
           if (saveResult && saveResult.error === 'version_conflict') {
-            console.warn(`Commit version conflict: had v${saveResult.client_version}, server has v${saveResult.server_version}`);
-            currentVersion = saveResult.server_version;
+            const cv = saveResult.client_version;
+            const sv = saveResult.server_version;
+            currentVersion = sv;
             $('version').textContent = 'v' + currentVersion;
-            lastXml = saveResult.content || '';
-            $('status').textContent = 'Version conflict - please retry';
-            if (isEditorReady) {
-              postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
-              postToEditor({ action: 'status', modified: false });
+            lastXml = saveResult.content || lastXml;
+            if (sv > cv + 1) {
+              console.warn(`Commit version conflict: had v${cv}, server has v${sv} - reloading`);
+              $('status').textContent = 'Version conflict - please retry';
+              if (isEditorReady) {
+                postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+                postToEditor({ action: 'status', modified: false });
+              }
+            } else {
+              $('status').textContent = 'Version synced - try commit again';
             }
             return;
           }
