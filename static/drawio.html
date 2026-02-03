@@ -205,7 +205,9 @@
     const $ = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
     const filePath = params.get('path') || params.get('name');
-    $('file').textContent = filePath || '(no file)';
+    const versionParam = params.get('version'); // commit_oid for historic version
+    const isReadOnly = params.get('readonly') !== null || versionParam !== null;
+    $('file').textContent = filePath ? (filePath + (isReadOnly ? ' (read-only)' : '')) : '(no file)';
 
     // Store token from URL if present
     const urlToken = params.get('token');
@@ -267,7 +269,8 @@
 
     async function loadInitial() {
       if (!filePath) return;
-      const url = addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`);
+      let url = addTokenToUrl(`/api/file?path=${encodeURIComponent(filePath)}`);
+      if (versionParam) url += '&version=' + encodeURIComponent(versionParam);
       const resp = await fetch(url, { credentials: 'include' });
       if (!resp.ok) {
         if (resp.status === 401) {
@@ -282,11 +285,11 @@
       }
       const meta = await resp.json();
       currentVersion = meta.version || 0;
-      $('version').textContent = 'v' + currentVersion;
+      $('version').textContent = isReadOnly ? 'read-only' : ('v' + currentVersion);
       lastXml = meta.content || '';
       // If editor already ready, push content
       if (isEditorReady) {
-        postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+        postToEditor({ action: 'load', autosave: isReadOnly ? 0 : 1, xml: lastXml, title: filePath });
       }
     }
 
@@ -681,12 +684,19 @@
         isEditorReady = true;
         // Load initial xml once editor is ready
         if (lastXml !== null) {
-          postToEditor({ action: 'load', autosave: 1, xml: lastXml, title: filePath });
+          postToEditor({ action: 'load', autosave: isReadOnly ? 0 : 1, xml: lastXml, title: filePath });
         }
-        // Request event stream (selection/mouse) from embed
-        try {
-          postToEditor({ action: 'configure', config: { listen: true, events: true, eventsEnabled: true } });
-        } catch { }
+        if (isReadOnly) {
+          try {
+            postToEditor({ action: 'configure', config: { readOnly: true } });
+          } catch { }
+          $('status').textContent = 'Read-only';
+        } else {
+          // Request event stream (selection/mouse) from embed
+          try {
+            postToEditor({ action: 'configure', config: { listen: true, events: true, eventsEnabled: true } });
+          } catch { }
+        }
         // Try to attach direct listeners if same-origin
         attachSameOriginMouseTracking();
         return;
@@ -723,6 +733,7 @@
       }
       // The editor asks us to save current XML
       if (data.event === 'save' || data.action === 'save' || data.event === 'autosave') {
+        if (isReadOnly) return;
         // Skip saves while loading content from server to prevent race conditions
         if (isLoadingContent) {
           return;
@@ -796,6 +807,7 @@
       }
       // Editor export response (used when xml not included in save/autosave)
       if (data.event === 'export') {
+        if (isReadOnly) return;
         if (waitingExportForSave) {
           waitingExportForSave = false;
           const xml = data.data || data.xml || '';
@@ -1133,7 +1145,7 @@
     });
 
     refreshMe();
-    loadInitial().then(connectWS);
+    loadInitial().then(() => { if (!isReadOnly) connectWS(); });
   </script>
 </body>
 

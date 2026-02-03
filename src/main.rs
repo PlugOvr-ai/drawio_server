@@ -1328,6 +1328,24 @@ async fn api_get_file(
     let Some(safe) = sanitize_rel_path(path) else {
         return (StatusCode::BAD_REQUEST, "invalid path").into_response();
     };
+    // Historic version: serve content from git at given commit (read-only)
+    if let Some(commit_oid) = q.get("version") {
+        match state
+            .git_manager
+            .get_version_content(&safe, commit_oid)
+            .await
+        {
+            Ok(content) => {
+                return Json(FileContentResponse {
+                    name: safe.clone(),
+                    version: 0,
+                    content,
+                })
+                .into_response();
+            }
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    }
     match ensure_room_loaded(&state, &safe).await {
         Ok(room) => {
             let content = room.content.read().await.clone();

@@ -231,7 +231,7 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      width: min(720px, 94vw);
+      width: min(1000px, 98vw);
       max-height: 85vh;
       background: var(--panel);
       border: 1px solid var(--border);
@@ -837,6 +837,12 @@
             '<td class="version-msg" title="' + (v.message || '').replace(/"/g, '&quot;') + '">' + (v.message || '–') + '</td>' +
             '<td><div class="version-actions"></div></td>';
           const actions = tr.querySelector('.version-actions');
+          const btnOpenReadOnly = document.createElement('a');
+          btnOpenReadOnly.className = 'button';
+          btnOpenReadOnly.textContent = 'Open read-only';
+          btnOpenReadOnly.href = addTokenToUrl('/drawio.html?path=' + encodeURIComponent(versionHistoryFilePath) + '&version=' + encodeURIComponent(v.commit_oid) + '&readonly=1');
+          btnOpenReadOnly.target = '_blank';
+          btnOpenReadOnly.rel = 'noopener';
           const btnDownload = document.createElement('button');
           btnDownload.textContent = 'Download';
           btnDownload.onclick = () => {
@@ -860,6 +866,7 @@
               await refreshFiles();
             } catch (e) { alert(e.message); }
           };
+          actions.appendChild(btnOpenReadOnly);
           actions.appendChild(btnDownload);
           actions.appendChild(btnRestore);
           vhTbody.appendChild(tr);
