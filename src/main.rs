@@ -1569,6 +1569,33 @@ async fn api_download(
     let Some(safe) = sanitize_rel_path(path) else {
         return (StatusCode::BAD_REQUEST, "invalid path").into_response();
     };
+    let filename = safe.split('/').last().unwrap_or("diagram.drawio");
+
+    // If version (commit_oid) is provided, serve that version's content from git
+    if let Some(commit_oid) = q.get("version") {
+        match state
+            .git_manager
+            .get_version_content(&safe, commit_oid)
+            .await
+        {
+            Ok(content) => {
+                let bytes = content.into_bytes();
+                let mut resp = Response::new(axum::body::Body::from(bytes));
+                resp.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("application/xml"),
+                );
+                let cd = format!("attachment; filename=\"{}\"", filename);
+                if let Ok(val) = axum::http::HeaderValue::from_str(&cd) {
+                    resp.headers_mut()
+                        .insert(axum::http::header::CONTENT_DISPOSITION, val);
+                }
+                return resp;
+            }
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
     let pb = to_data_rel_path(&state.data_dir, &safe);
     let Ok(bytes) = fs::read(&pb).await else {
         return StatusCode::NOT_FOUND.into_response();
@@ -1578,7 +1605,6 @@ async fn api_download(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/xml"),
     );
-    let filename = safe.split('/').last().unwrap_or("diagram.drawio");
     let cd = format!("attachment; filename=\"{}\"", filename);
     if let Ok(val) = axum::http::HeaderValue::from_str(&cd) {
         resp.headers_mut()

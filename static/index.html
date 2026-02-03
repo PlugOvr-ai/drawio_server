@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,24 +9,97 @@
     :root {
       --bg: #ffffff;
       --panel: #ffffff;
-      --muted: #6b7280;     /* gray-500 */
-      --border: #e5e7eb;    /* gray-200 */
-      --accent: #2563eb;    /* blue-600 */
-      --text: #111827;      /* gray-900 */
+      --muted: #6b7280;
+      /* gray-500 */
+      --border: #e5e7eb;
+      /* gray-200 */
+      --accent: #2563eb;
+      /* blue-600 */
+      --text: #111827;
+      /* gray-900 */
     }
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; color: var(--text); background: var(--bg); }
-    .layout { display: grid; grid-template-columns: 260px 1fr; }
-    aside { height: 100vh; border-right: 1px solid var(--border); background: #f8fafc; padding: 16px 12px; position: sticky; top: 0; }
-    main { min-height: 100vh; background: #f9fafb; }
-    header.top { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border); background: #f8fafc; position: sticky; top: 0; z-index: 10; }
-    .app { padding: 16px; }
-    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
-    input, button, select, a.button { background: #ffffff; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-    button, a.button { cursor: pointer; }
-    .muted { color: var(--muted); font-size: 12px; }
-    .nav { display: grid; gap: 8px; }
-    .nav a, .nav button {
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+    }
+
+    aside {
+      height: 100vh;
+      border-right: 1px solid var(--border);
+      background: #f8fafc;
+      padding: 16px 12px;
+      position: sticky;
+      top: 0;
+    }
+
+    main {
+      min-height: 100vh;
+      background: #f9fafb;
+    }
+
+    header.top {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .app {
+      padding: 16px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    input,
+    button,
+    select,
+    a.button {
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+
+    button,
+    a.button {
+      cursor: pointer;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav a,
+    .nav button {
       display: grid;
       grid-template-columns: 24px 1fr;
       align-items: center;
@@ -40,22 +114,94 @@
       text-align: left;
       font: inherit;
     }
-    .nav a:hover, .nav button:hover { background: #f3f4f6; border-color: var(--border); }
-    .nav a:active, .nav button:active { border-color: var(--accent); }
-    .crumbs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .toolbar { display: flex; gap: 8px; align-items: center; }
-    table.files { width: 100%; border-collapse: collapse; }
-    table.files th, table.files td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
-    table.files th { color: var(--muted); font-weight: 600; text-align: left; background: #f3f4f6; position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 var(--border); }
-    table.files tr:hover { background: #f9fafb; }
-    .namecell { display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 8px; }
-    .icon { width: 16px; height: 16px; display: inline-block; border-radius: 3px; background: #9ca3af; justify-self: center; }
-    .folder { background: #60a5fa; }
-    .file { background: #9ca3af; }
-    .gear { background: #93c5fd; }
-    .row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    .nav a:hover,
+    .nav button:hover {
+      background: #f3f4f6;
+      border-color: var(--border);
+    }
+
+    .nav a:active,
+    .nav button:active {
+      border-color: var(--accent);
+    }
+
+    .crumbs {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    table.files {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    table.files th,
+    table.files td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.files th {
+      color: var(--muted);
+      font-weight: 600;
+      text-align: left;
+      background: #f3f4f6;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      box-shadow: 0 1px 0 var(--border);
+    }
+
+    table.files tr:hover {
+      background: #f9fafb;
+    }
+
+    .namecell {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon {
+      width: 16px;
+      height: 16px;
+      display: inline-block;
+      border-radius: 3px;
+      background: #9ca3af;
+      justify-self: center;
+    }
+
+    .folder {
+      background: #60a5fa;
+    }
+
+    .file {
+      background: #9ca3af;
+    }
+
+    .gear {
+      background: #93c5fd;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
     /* Uniform action button look */
-    .row-actions a, .row-actions button {
+    .row-actions a,
+    .row-actions button {
       background: #ffffff;
       color: var(--text);
       border: 1px solid var(--border);
@@ -64,11 +210,139 @@
       text-decoration: none;
       font: inherit;
     }
-    .row-actions a:hover, .row-actions button:hover {
+
+    .row-actions a:hover,
+    .row-actions button:hover {
       background: #f3f4f6;
+    }
+
+    /* Version history modal (SharePoint-style) */
+    .version-history-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 40;
+    }
+
+    .version-history-modal {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(720px, 94vw);
+      max-height: 85vh;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+      z-index: 50;
+      overflow: hidden;
+      flex-direction: column;
+    }
+
+    .version-history-modal .vhm-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .version-history-modal .vhm-title {
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--text);
+    }
+
+    .version-history-modal .vhm-body {
+      overflow: auto;
+      padding: 16px 20px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .version-history-modal table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .version-history-modal th {
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+    }
+
+    .version-history-modal td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    .version-history-modal tr:hover {
+      background: #f9fafb;
+    }
+
+    .version-history-modal .version-num {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .version-history-modal .version-date {
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .version-history-modal .version-by {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .version-history-modal .version-msg {
+      color: var(--muted);
+      font-size: 12px;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .version-history-modal .version-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .version-history-modal .version-actions button {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    .version-history-modal .version-actions .btn-restore {
+      background: #dbeafe;
+      color: #1d4ed8;
+      border-color: #93c5fd;
+    }
+
+    .version-history-modal .version-actions .btn-restore:hover {
+      background: #bfdbfe;
+    }
+
+    .version-history-empty {
+      color: var(--muted);
+      padding: 24px;
+      text-align: center;
     }
   </style>
 </head>
+
 <body>
   <div class="layout">
     <aside>
@@ -111,9 +385,36 @@
   </div>
   <!-- Hidden file input for upload -->
   <input type="file" id="file-input" accept=".drawio" style="display: none;" />
+  <!-- Version history modal (SharePoint-style) -->
+  <div id="version-history-backdrop" class="version-history-backdrop"></div>
+  <div id="version-history-modal" class="version-history-modal">
+    <div class="vhm-header">
+      <span class="vhm-title" id="version-history-title">Version history</span>
+      <button id="version-history-close">Close</button>
+    </div>
+    <div class="vhm-body">
+      <div id="version-history-loading" class="version-history-empty" style="display:none;">Loading versions…</div>
+      <div id="version-history-empty" class="version-history-empty" style="display:none;">No version history for this
+        file.</div>
+      <table id="version-history-table" style="display:none;">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Modified</th>
+            <th>Modified by</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="version-history-tbody"></tbody>
+      </table>
+    </div>
+  </div>
   <!-- Settings modal -->
-  <div id="settings-backdrop" style="display:none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 40;"></div>
-  <div id="settings-modal" class="card" style="display:none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, 92vw); padding: 16px; z-index: 50;">
+  <div id="settings-backdrop"
+    style="display:none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 40;"></div>
+  <div id="settings-modal" class="card"
+    style="display:none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, 92vw); padding: 16px; z-index: 50;">
     <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
       <strong>Settings</strong>
       <button id="settings-close">Close</button>
@@ -133,7 +434,7 @@
     const fileBody = $('file-tbody');
 
     let cwd = '';
-    
+
     // Helper function to add token to URLs
     function addTokenToUrl(url) {
       const storedToken = localStorage.getItem('drawio_token');
@@ -254,8 +555,13 @@
               await refreshFiles();
             } catch (e) { alert(e.message); }
           };
+          const btnVersionHistory = document.createElement('button');
+          btnVersionHistory.textContent = 'Version history';
+          btnVersionHistory.style.display = f.is_dir ? 'none' : 'inline-block';
+          btnVersionHistory.onclick = () => openVersionHistory(f.path, f.name);
           actions.appendChild(btnOpen);
           actions.appendChild(btnDownload);
+          actions.appendChild(btnVersionHistory);
           actions.appendChild(btnRename);
           actions.appendChild(btnDelete);
           tdAct.appendChild(actions);
@@ -319,25 +625,25 @@
     });
     $('refresh').onclick = refreshFiles;
     $('nav-root').onclick = (e) => { e.preventDefault(); cwd = ''; refreshFiles(); };
-    
+
     // Upload functionality
     const fileInput = $('file-input');
     const uploadBtn = $('upload-btn');
     const navUpload = $('nav-upload');
-    
+
     async function handleFileUpload(file) {
       if (!file) return;
-      
+
       // Check if file has .drawio extension
       if (!file.name.endsWith('.drawio')) {
         if (!confirm('File does not end with .drawio. Upload anyway? (extension will be added)')) {
           return;
         }
       }
-      
+
       const formData = new FormData();
       formData.append('file', file);
-      
+
       // Build URL with optional path query parameter
       let url = '/api/upload';
       if (cwd) {
@@ -345,19 +651,19 @@
         const suggestedPath = cwd + '/' + file.name;
         url += '?path=' + encodeURIComponent(suggestedPath);
       }
-      
+
       try {
         const res = await fetch(addTokenToUrl(url), {
           method: 'POST',
           credentials: 'include',
           body: formData,
         });
-        
+
         if (!res.ok) {
           const errorText = await res.text();
           throw new Error(errorText || 'Upload failed');
         }
-        
+
         const result = await res.json();
         alert(`File uploaded successfully: ${result.path}`);
         await refreshFiles();
@@ -365,7 +671,7 @@
         alert('Upload error: ' + e.message);
       }
     }
-    
+
     fileInput.onchange = (e) => {
       const file = e.target.files?.[0];
       if (file) {
@@ -374,14 +680,14 @@
       // Reset input so same file can be selected again
       fileInput.value = '';
     };
-    
+
     if (uploadBtn) {
       uploadBtn.onclick = () => fileInput.click();
     }
     if (navUpload) {
       navUpload.onclick = () => fileInput.click();
     }
-    
+
     $('nav-new-folder').onclick = async () => {
       const name = prompt('Folder name:');
       if (!name) return;
@@ -423,7 +729,7 @@
     }
 
     function formatSize(n) {
-      const units = ['B','KB','MB','GB','TB'];
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
       let i = 0; let x = n;
       while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
       return (i === 0 ? x : x.toFixed(2)) + ' ' + units[i];
@@ -434,11 +740,11 @@
       const s = Math.floor(d / 1000);
       if (s < 60) return 'just now';
       const m = Math.floor(s / 60);
-      if (m < 60) return `${m} minute${m===1?'':'s'} ago`;
+      if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
       const h = Math.floor(m / 60);
-      if (h < 24) return `${h} hour${h===1?'':'s'} ago`;
+      if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
       const days = Math.floor(h / 24);
-      return `${days} day${days===1?'':'s'} ago`;
+      return `${days} day${days === 1 ? '' : 's'} ago`;
     }
     function getTemplateXml(kind) {
       if (kind === 'flow') {
@@ -447,10 +753,115 @@
       return '<?xml version="1.0" encoding="UTF-8"?><mxfile><diagram name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>';
     }
 
+    // ----- Version history (SharePoint-style) -----
+    let versionHistoryFilePath = '';
+    const vhBackdrop = $('version-history-backdrop');
+    const vhModal = $('version-history-modal');
+    const vhTitle = $('version-history-title');
+    const vhLoading = $('version-history-loading');
+    const vhEmpty = $('version-history-empty');
+    const vhTable = $('version-history-table');
+    const vhTbody = $('version-history-tbody');
+
+    function formatVersionDate(isoStr) {
+      if (!isoStr) return '–';
+      const d = new Date(isoStr);
+      const now = new Date();
+      const diffMs = now - d;
+      const diffM = Math.floor(diffMs / 60000);
+      const diffH = Math.floor(diffMs / 3600000);
+      const diffD = Math.floor(diffMs / 86400000);
+      if (diffM < 1) return 'Just now';
+      if (diffM < 60) return diffM + ' minute' + (diffM === 1 ? '' : 's') + ' ago';
+      if (diffH < 24) return diffH + ' hour' + (diffH === 1 ? '' : 's') + ' ago';
+      if (diffD < 7) return diffD + ' day' + (diffD === 1 ? '' : 's') + ' ago';
+      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function openVersionHistory(filePath, fileName) {
+      versionHistoryFilePath = filePath;
+      vhTitle.textContent = 'Version history – ' + (fileName || filePath);
+      vhBackdrop.style.display = 'block';
+      vhModal.style.display = 'flex';
+      vhLoading.style.display = 'block';
+      vhEmpty.style.display = 'none';
+      vhTable.style.display = 'none';
+      vhTbody.innerHTML = '';
+      loadVersionHistory();
+    }
+
+    function closeVersionHistory() {
+      vhBackdrop.style.display = 'none';
+      vhModal.style.display = 'none';
+      versionHistoryFilePath = '';
+    }
+
+    async function loadVersionHistory() {
+      if (!versionHistoryFilePath) return;
+      try {
+        const data = await fetchJSON('/api/versions?path=' + encodeURIComponent(versionHistoryFilePath));
+        vhLoading.style.display = 'none';
+        const versions = data.versions || [];
+        if (versions.length === 0) {
+          vhEmpty.style.display = 'block';
+          vhTable.style.display = 'none';
+          return;
+        }
+        vhEmpty.style.display = 'none';
+        vhTable.style.display = 'table';
+        vhTbody.innerHTML = '';
+        versions.forEach((v, idx) => {
+          const tr = document.createElement('tr');
+          const ts = v.timestamp || '';
+          tr.innerHTML =
+            '<td class="version-num">' + (v.version || ('v' + (idx + 1))) + '</td>' +
+            '<td class="version-date">' + formatVersionDate(ts) + '</td>' +
+            '<td class="version-by">' + (v.username || '–') + '</td>' +
+            '<td class="version-msg" title="' + (v.message || '').replace(/"/g, '&quot;') + '">' + (v.message || '–') + '</td>' +
+            '<td><div class="version-actions"></div></td>';
+          const actions = tr.querySelector('.version-actions');
+          const btnDownload = document.createElement('button');
+          btnDownload.textContent = 'Download';
+          btnDownload.onclick = () => {
+            const url = addTokenToUrl('/api/download?path=' + encodeURIComponent(versionHistoryFilePath) + '&version=' + encodeURIComponent(v.commit_oid));
+            window.open(url, '_blank');
+          };
+          const btnRestore = document.createElement('button');
+          btnRestore.className = 'btn-restore';
+          btnRestore.textContent = 'Restore';
+          btnRestore.onclick = async () => {
+            if (!confirm('Restore this version? The current file will be replaced and a new version will be created.')) return;
+            try {
+              const res = await fetch(addTokenToUrl('/api/versions?path=' + encodeURIComponent(versionHistoryFilePath)), {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ commit_oid: v.commit_oid }),
+              });
+              if (!res.ok) throw new Error(await res.text());
+              closeVersionHistory();
+              await refreshFiles();
+            } catch (e) { alert(e.message); }
+          };
+          actions.appendChild(btnDownload);
+          actions.appendChild(btnRestore);
+          vhTbody.appendChild(tr);
+        });
+      } catch (e) {
+        vhLoading.style.display = 'none';
+        vhEmpty.style.display = 'block';
+        vhEmpty.textContent = 'Could not load version history: ' + e.message;
+        vhTable.style.display = 'none';
+      }
+    }
+
+    $('version-history-close').onclick = closeVersionHistory;
+    if (vhBackdrop) vhBackdrop.onclick = closeVersionHistory;
+
     refreshMe();
     refreshFiles();
     // load viewer script for previews
-    (function loadViewer(){
+    (function loadViewer() {
       const s = document.createElement('script');
       s.src = 'https://viewer.diagrams.net/js/viewer.min.js';
       s.async = true;
@@ -458,6 +869,5 @@
     })();
   </script>
 </body>
+
 </html>
-
-
