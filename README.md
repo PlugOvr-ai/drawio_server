@@ -89,3 +89,7 @@ The admin panel allows you to configure Git remote settings and schedule automat
 
 The admin token is separate from the regular authentication token and provides access to administrative functions only.
 
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for the full text.
+
