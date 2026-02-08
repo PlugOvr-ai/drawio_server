@@ -6,8 +6,6 @@ A collaborative draw.io server built with Rust and Axum.
 
 ![Demo](demo.gif)
 
-*[Watch the full video (with audio)](demo.mp4)*
-
 ## Quick Start
 
 ### Using Docker
