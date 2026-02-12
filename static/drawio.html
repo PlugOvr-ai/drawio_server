@@ -238,6 +238,63 @@
     let pendingSaveVersion = null; // Track pending save to confirm when broadcast returns
     let isLoadingContent = false; // Prevent saves while loading content from server
 
+    // Normalize XML by removing metadata that changes when switching tabs/pages
+    // This helps detect if actual content changed vs just tab switching
+    function normalizeXmlForComparison(xml) {
+      if (!xml) return '';
+      try {
+        // Parse XML to extract only the actual diagram content (cells)
+        // This ignores metadata, page IDs, timestamps, etc.
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(xml, 'text/xml');
+
+        // Check for parse errors
+        const parseError = doc.querySelector('parsererror');
+        if (parseError) {
+          // If parsing fails, fall back to string-based normalization
+          return xml.replace(/[\s\n\r\t]+/g, ' ').trim();
+        }
+
+        // Extract all mxCell elements (the actual diagram content)
+        const cells = doc.querySelectorAll('mxCell');
+        const cellData = Array.from(cells).map(cell => {
+          // Get the cell's value and key attributes that define its content
+          const value = cell.getAttribute('value') || '';
+          const style = cell.getAttribute('style') || '';
+          const parent = cell.getAttribute('parent') || '';
+          const edge = cell.getAttribute('edge') || '';
+          const source = cell.getAttribute('source') || '';
+          const target = cell.getAttribute('target') || '';
+
+          // Get geometry (position and size) which is part of the actual content
+          const geometry = cell.querySelector('mxGeometry');
+          let geoStr = '';
+          if (geometry) {
+            const x = geometry.getAttribute('x') || '';
+            const y = geometry.getAttribute('y') || '';
+            const width = geometry.getAttribute('width') || '';
+            const height = geometry.getAttribute('height') || '';
+            geoStr = `[${x},${y},${width},${height}]`;
+          }
+
+          // Create a signature of the cell's content (ignoring IDs and metadata)
+          return `${value}|${style}|${parent}|${edge}|${source}|${target}${geoStr}`;
+        }).sort().join('||');
+
+        // Also include the structure (root and layer organization)
+        const roots = doc.querySelectorAll('root');
+        const rootStructure = Array.from(roots).map(root => {
+          const children = Array.from(root.children).length;
+          return children.toString();
+        }).join(',');
+
+        return `${cellData}::${rootStructure}`;
+      } catch (e) {
+        // If normalization fails, fall back to simple whitespace normalization
+        return xml.replace(/[\s\n\r\t]+/g, ' ').trim();
+      }
+    }
+
     // Helper function to add token to URLs
     function addTokenToUrl(url) {
       const storedToken = localStorage.getItem('drawio_token');
@@ -739,7 +796,6 @@
           return;
         }
         try {
-          $('status').textContent = 'Saving...';
           let xml = data.xml || '';
           // Fallback path: request export if xml not provided
           if (!xml) {
@@ -747,6 +803,14 @@
             postToEditor({ action: 'export', format: 'xml' });
             return; // continue when we receive export
           }
+          // Skip save if content hasn't changed (e.g., when only tab/page is switched)
+          // Normalize both XML strings to ignore whitespace and metadata differences
+          const normalizedXml = normalizeXmlForComparison(xml);
+          const normalizedLastXml = normalizeXmlForComparison(lastXml);
+          if (normalizedXml === normalizedLastXml) {
+            return;
+          }
+          $('status').textContent = 'Saving...';
           lastXml = xml;
           // Save via WebSocket when connected (preferred - handles versioning and persistence)
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -813,6 +877,13 @@
           const xml = data.data || data.xml || '';
           if (!xml) {
             $('status').textContent = 'Export failed';
+            return;
+          }
+          // Skip save if content hasn't changed (e.g., when only tab/page is switched)
+          // Normalize both XML strings to ignore whitespace and metadata differences
+          const normalizedXml = normalizeXmlForComparison(xml);
+          const normalizedLastXml = normalizeXmlForComparison(lastXml);
+          if (normalizedXml === normalizedLastXml) {
             return;
           }
           (async () => {
