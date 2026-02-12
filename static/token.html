@@ -1,19 +1,80 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Enter Access Token</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 0; background: #ffffff; color: #111827; display: grid; place-items: center; height: 100vh; }
-    .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; width: min(420px, 92vw); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    h1 { margin: 0 0 12px; font-size: 18px; }
-    p { color: #6b7280; font-size: 13px; }
-    input, button { width: 100%; background: #ffffff; color: #111827; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; }
-    button { cursor: pointer; margin-top: 10px; }
-    .err { color: #b91c1c; font-size: 12px; height: 16px; margin-top: 8px; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #111827;
+      display: grid;
+      place-items: center;
+      height: 100vh;
+    }
+
+    .card {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 20px;
+      width: min(420px, 92vw);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    p {
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    input,
+    button {
+      width: 100%;
+      background: #ffffff;
+      color: #111827;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    button {
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    .err {
+      color: #b91c1c;
+      font-size: 12px;
+      height: 16px;
+      margin-top: 8px;
+    }
   </style>
   <script>
+    // Cookie helper functions
+    function setCookie(name, value, days) {
+      const expires = new Date();
+      expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
+      document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires.toUTCString()};path=/`;
+    }
+    function getCookie(name) {
+      const nameEQ = name + '=';
+      const ca = document.cookie.split(';');
+      for (let i = 0; i < ca.length; i++) {
+        let c = ca[i];
+        while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+        if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length, c.length));
+      }
+      return null;
+    }
     async function submitToken(e) {
       e?.preventDefault();
       const token = document.getElementById('token').value.trim();
@@ -21,22 +82,23 @@
       const err = document.getElementById('err');
       err.textContent = '';
       if (!token) { err.textContent = 'Enter token'; return; }
+      if (!name) { err.textContent = 'Enter display name'; return; }
       try {
         const resp = await fetch('/auth/token?token=' + encodeURIComponent(token), { redirect: 'follow', credentials: 'include' });
         if (!resp.ok && !resp.redirected) {
           err.textContent = 'Invalid token';
           return;
         }
-        if (name) {
-          await fetch('/me', {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: name }),
-          }).catch(() => {});
-        }
+        await fetch('/me', {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: name }),
+        }).catch(() => { });
         // Store token in localStorage for re-authentication
         localStorage.setItem('drawio_token', token);
+        // Store username in cookie (expires in 365 days)
+        setCookie('drawio_username', name, 365);
         // If not redirected, go home
         location.href = '/';
       } catch {
@@ -48,18 +110,24 @@
       if (urlToken) {
         document.getElementById('token').value = urlToken;
       }
+      // Load username from cookie if available
+      const savedUsername = getCookie('drawio_username');
+      if (savedUsername) {
+        document.getElementById('displayName').value = savedUsername;
+      }
       document.getElementById('form').addEventListener('submit', submitToken);
       document.getElementById('go').addEventListener('click', submitToken);
     });
   </script>
   <meta name="robots" content="noindex, nofollow" />
 </head>
+
 <body>
   <div class="card">
     <h1>Enter Access Token</h1>
     <p>Paste the server token provided by your administrator to continue.</p>
     <label class="muted">Display name</label>
-    <input id="displayName" placeholder="display name" />
+    <input id="displayName" placeholder="display name" required />
     <form id="form">
       <input id="token" placeholder="Token" autocomplete="off" autofocus />
       <button id="go" type="submit">Continue</button>
@@ -67,6 +135,5 @@
     </form>
   </div>
 </body>
+
 </html>
-
-
